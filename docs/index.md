@@ -1,6 +1,6 @@
 # cpz-quant
 
-**cpz-quant** is the open-source quantitative research engine from [CPZ Lab](https://www.cpz-lab.com): portfolio optimization, covariance estimation, risk measures, time-aware cross-validation, anti-overfitting strategy certification, and vectorised technical indicators for Python.
+**cpz-quant** is the open-source quantitative research engine from [CPZ Lab](https://ai.cpz-lab.com): portfolio optimization, covariance estimation, risk measures, time-aware cross-validation, anti-overfitting strategy certification, and vectorised technical indicators for Python.
 
 ```bash
 pip install cpz-quant

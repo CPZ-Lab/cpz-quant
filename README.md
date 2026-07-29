@@ -1,12 +1,26 @@
-# cpz-quant: Portfolio Optimization, Risk Analytics, and Strategy Certification in Python
+<p align="center">
+  <a href="https://ai.cpz-lab.com/">
+    <img src="https://drive.google.com/uc?id=1JY-PoPj9GHmpq3bZLC7WyJLbGuT1L3hN" alt="CPZAI" width="180">
+  </a>
+</p>
 
-[![PyPI](https://img.shields.io/pypi/v/cpz-quant)](https://pypi.org/project/cpz-quant/)
-[![Python](https://img.shields.io/pypi/pyversions/cpz-quant)](https://pypi.org/project/cpz-quant/)
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
-[![CI](https://github.com/CPZ-Lab/cpz-quant/actions/workflows/ci.yml/badge.svg)](https://github.com/CPZ-Lab/cpz-quant/actions/workflows/ci.yml)
-[![Typed](https://img.shields.io/badge/typing-py.typed-informational)](pyproject.toml)
+<h1 align="center">cpz-quant</h1>
 
-**cpz-quant** is the open-source quantitative research engine from [CPZ Lab](https://www.cpz-lab.com): institutional-grade **portfolio optimization**, **covariance estimation**, **risk measures**, **walk-forward and combinatorial purged cross-validation**, **anti-overfitting strategy certification** (Probability of Backtest Overfitting, Deflated Sharpe Ratio), and **vectorised technical indicators**. Pure functions on NumPy arrays and plain dictionaries: data in, results out, no I/O, no hidden state, fully typed.
+<p align="center"><b>Portfolio optimization, risk analytics, and strategy certification in Python</b></p>
+
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="License: Apache-2.0"></a>
+  <a href="pyproject.toml"><img src="https://img.shields.io/badge/python-3.9%20%7C%203.10%20%7C%203.11%20%7C%203.12-informational" alt="Python 3.9-3.12"></a>
+  <a href="pyproject.toml"><img src="https://img.shields.io/badge/typing-py.typed-informational" alt="Typed"></a>
+</p>
+
+<p align="center">
+  <a href="https://ai.cpz-lab.com/">CPZAI operating system</a> ·
+  <a href="https://cpz-lab.github.io/cpz-quant/">Documentation</a> ·
+  <a href="https://github.com/CPZ-Lab/cpz-quant/issues">Issues</a>
+</p>
+
+**cpz-quant** is the open-source quantitative research engine from [CPZ Lab](https://ai.cpz-lab.com): institutional-grade **portfolio optimization**, **covariance estimation**, **risk measures**, **walk-forward and combinatorial purged cross-validation**, **anti-overfitting strategy certification** (Probability of Backtest Overfitting, Deflated Sharpe Ratio), and **vectorised technical indicators**. Pure functions on NumPy arrays and plain dictionaries: data in, results out, no I/O, no hidden state, fully typed.
 
 It is the research core of the CPZAI systematic trading operating system, and it is fully standalone: `pip install cpz-quant` and you have the complete library with an Apache-2.0 license.
 

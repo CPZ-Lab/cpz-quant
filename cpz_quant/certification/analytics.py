@@ -23,7 +23,9 @@ import numpy as np
 try:  # optional Rust acceleration (built via `cd rust && maturin develop --release`)
     import cpz_risk_rs  # type: ignore
 
-    _RUST = True
+    # An older compiled extension may predate this symbol — verify it, don't
+    # assume it (mirrors cpz_quant.indicators._rust_accel).
+    _RUST = hasattr(cpz_risk_rs, "certification_analytics")
 except ImportError:  # pragma: no cover - depends on build
     _RUST = False
 

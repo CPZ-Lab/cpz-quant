@@ -86,7 +86,7 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://www.cpz-lab.com/cpz-ai"
+Homepage = "https://ai.cpz-lab.com"
 Repository = "https://github.com/CPZ-Lab/cpz-quant"
 Documentation = "https://cpz-lab.github.io/cpz-quant/"
 Issues = "https://github.com/CPZ-Lab/cpz-quant/issues"
