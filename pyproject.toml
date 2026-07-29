@@ -1,0 +1,153 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cpz-quant"
+version = "1.0.0"
+description = "Quantitative portfolio optimization, risk analytics, and anti-overfitting strategy certification in Python: mean-variance, HRP, HERC, NCO, Black-Litterman, entropy pooling, CVaR, robust and cardinality-constrained convex optimization, covariance shrinkage and denoising, walk-forward and combinatorial purged cross-validation, Probability of Backtest Overfitting, Deflated Sharpe Ratio, and vectorised technical indicators."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.9"
+authors = [{ name = "CPZ Lab", email = "contact@cpz-lab.com" }]
+maintainers = [{ name = "CPZ Lab", email = "contact@cpz-lab.com" }]
+keywords = [
+  "portfolio optimization",
+  "quantitative finance",
+  "risk management",
+  "mean-variance",
+  "hierarchical risk parity",
+  "HRP",
+  "HERC",
+  "black-litterman",
+  "entropy pooling",
+  "CVaR",
+  "risk parity",
+  "covariance shrinkage",
+  "ledoit-wolf",
+  "walk-forward",
+  "purged cross-validation",
+  "backtest overfitting",
+  "deflated sharpe ratio",
+  "strategy certification",
+  "technical indicators",
+  "convex optimization",
+  "cvxpy",
+  "trading",
+  "asset allocation",
+  "quant",
+]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Typing :: Typed",
+  "Development Status :: 5 - Production/Stable",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Financial and Insurance Industry",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: Apache Software License",
+  "Operating System :: OS Independent",
+  "Topic :: Office/Business :: Financial :: Investment",
+  "Topic :: Scientific/Engineering :: Mathematics",
+]
+dependencies = [
+  "numpy>=1.26",
+  "scipy>=1.11",
+  "polars>=1.0,<2",
+  "pydantic>=2.6,<3",
+]
+
+[project.optional-dependencies]
+sklearn = ["scikit-learn>=1.3"]
+cvx = ["cvxpy>=1.4"]
+cvx-mip = ["cvxpy>=1.4", "PySCIPOpt>=4.3"]
+quantum = ["dwave-neal>=0.6", "dimod>=0.12"]
+all = [
+  "scikit-learn>=1.3",
+  "cvxpy>=1.4",
+  "PySCIPOpt>=4.3",
+  "dwave-neal>=0.6",
+  "dimod>=0.12",
+]
+dev = [
+  "pytest",
+  "pytest-cov",
+  "mypy",
+  "ruff",
+  "black",
+  "isort",
+  "scikit-learn>=1.3",
+  "cvxpy>=1.4",
+  "mkdocs-material>=9",
+]
+
+[project.urls]
+Homepage = "https://www.cpz-lab.com/cpz-ai"
+Repository = "https://github.com/CPZ-Lab/cpz-quant"
+Documentation = "https://cpz-lab.github.io/cpz-quant/"
+Issues = "https://github.com/CPZ-Lab/cpz-quant/issues"
+Changelog = "https://github.com/CPZ-Lab/cpz-quant/blob/main/CHANGELOG.md"
+
+[tool.setuptools]
+package-data = { "cpz_quant" = ["py.typed"] }
+
+[tool.setuptools.packages.find]
+include = ["cpz_quant", "cpz_quant.*"]
+
+[tool.mypy]
+# Runtime floor is 3.9 (enforced by the CI test matrix); modern numpy's
+# type stubs use PEP 695 syntax that mypy only parses at 3.12+.
+python_version = "3.12"
+# Pragmatic gate, enforced in CI. Full --strict is roadmap: most of the
+# remaining noise is numpy Any-propagation (no-any-return) and legacy
+# untyped internals inherited from the parent SDK.
+check_untyped_defs = true
+warn_redundant_casts = true
+warn_unused_configs = true
+implicit_optional = false
+show_error_codes = true
+pretty = true
+packages = ["cpz_quant"]
+ignore_missing_imports = true
+
+[tool.ruff]
+line-length = 100
+src = ["cpz_quant", "tests"]
+
+[tool.ruff.lint]
+# Explicit, version-stable rule set: pycodestyle errors, pyflakes, and
+# import order. Style-modernisation rules (UP*) are intentionally out --
+# the library supports Python 3.9 typing syntax.
+select = ["E4", "E7", "E9", "F", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+# `l` (low series) is idiomatic in OHLC indicator signatures; `fast_kama`
+# is re-exported for the Rust accel path.
+"cpz_quant/indicators/__init__.py" = ["E741", "F401"]
+# importorskip must run before the sklearn-dependent imports.
+"tests/test_sklearn_estimators.py" = ["E402"]
+
+[tool.black]
+line-length = 100
+
+[tool.isort]
+profile = "black"
+line_length = 100
+
+[tool.pytest.ini_options]
+addopts = "-q --cov=cpz_quant --cov-report=term-missing"
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+branch = true
+source = ["cpz_quant"]
+
+[tool.coverage.report]
+# Honest whole-package floor (no omit list). Ratchet upward as the
+# indicators and attribution suites grow.
+fail_under = 55

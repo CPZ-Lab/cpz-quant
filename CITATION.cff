@@ -1,0 +1,21 @@
+cff-version: 1.2.0
+message: "If you use cpz-quant in your research, please cite it as below."
+title: "cpz-quant: quantitative portfolio optimization, risk analytics, and strategy certification in Python"
+type: software
+authors:
+  - name: "CPZ Lab"
+    email: contact@cpz-lab.com
+    website: "https://www.cpz-lab.com"
+license: Apache-2.0
+repository-code: "https://github.com/CPZ-Lab/cpz-quant"
+url: "https://cpz-lab.github.io/cpz-quant/"
+version: 1.0.0
+date-released: 2026-07-29
+keywords:
+  - portfolio optimization
+  - quantitative finance
+  - risk management
+  - hierarchical risk parity
+  - backtest overfitting
+  - deflated sharpe ratio
+  - convex optimization
