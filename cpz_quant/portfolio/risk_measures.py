@@ -27,6 +27,8 @@ from typing import List, Optional
 import numpy as np
 from scipy import optimize as sp_opt
 
+from cpz_quant.frames import frame_friendly
+
 EPSILON = 1e-12
 
 
@@ -192,6 +194,7 @@ class MeanRiskResult:
     method: str = "mean_risk"
 
 
+@frame_friendly
 def mean_risk_optimize(
     asset_returns,
     *,

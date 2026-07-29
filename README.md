@@ -31,17 +31,20 @@ pip install cpz-quant
 ## 60-second quickstart
 
 ```python
+import polars as pl
 from cpz_quant.portfolio import (
     hierarchical_risk_parity, black_litterman, mean_cvar,
     ledoit_wolf, WalkForward, cross_validate,
 )
 
-# Daily returns per asset: plain dicts, no DataFrame ceremony required
-returns = {
-    "AAPL": [0.012, -0.004, 0.007, ...],
-    "MSFT": [0.008,  0.002, -0.001, ...],
-    "TLT":  [-0.002, 0.005, 0.001, ...],
-}
+# Daily returns per asset. Every function accepts a Polars DataFrame,
+# a pandas DataFrame, or a plain {asset: [returns]} dict — date/string
+# columns are treated as labels and excluded automatically.
+returns = pl.DataFrame({
+    "AAPL": [0.012, -0.004, 0.007],
+    "MSFT": [0.008,  0.002, -0.001],
+    "TLT":  [-0.002, 0.005, 0.001],
+})
 
 # Hierarchical Risk Parity: clustering-based allocation, no matrix inversion
 hrp = hierarchical_risk_parity(returns)
@@ -115,6 +118,18 @@ Most backtests are overfit. cpz-quant ships the math to prove whether yours is:
 
 Vectorised momentum, trend, volatility, volume, and statistical indicators on NumPy/Polars, with optional Rust acceleration and graceful pure-Python fallback.
 
+### Quantum and quantum-inspired optimization
+
+Portfolio selection as a QUBO problem with pluggable solvers: exact brute force, simulated annealing (`pip install cpz-quant[quantum]`, dwave-neal), and quantum-inspired HRP cluster ordering. `build_portfolio_qubo` exposes the raw QUBO matrix for any annealer. Real quantum hardware (IonQ, Rigetti, IQM via Amazon Braket) runs through the CPZAI operating system with cost gating; the local solvers are fully standalone.
+
+### Rust-accelerated core
+
+The `rust/` crate (`cpz_risk_rs`, PyO3 + rayon) ships in this repo and accelerates the hot paths: certification analytics, Monte Carlo VaR, Ledoit-Wolf and EWMA covariance, Marchenko-Pastur denoising, HRP weights, and the indicator kernels. Build it with `pip install maturin && cd rust && maturin develop --release`. Everything runs identically without it — pure NumPy fallbacks are parity-tested, and `has_rust()` tells you which path is active. No silent behavior differences, only speed.
+
+### Visualization
+
+`pip install cpz-quant[viz]` adds four Plotly figures in `cpz_quant.viz`: `plot_weights`, `plot_frontier` (efficient frontier with max-Sharpe and min-variance marked), `plot_drawdown` (equity + underwater panel), and `plot_corr_clusters` (correlation matrix ordered by HRP clustering). Plotly is never imported unless you use them.
+
 ### Transaction costs, capacity, and attribution
 
 Almgren-Chriss market impact, linear and square-root impact, spread costs, turnover analysis, alpha-decay capacity estimation, Brinson-Fachler attribution, factor and risk attribution, alpha-beta decomposition.
@@ -122,6 +137,7 @@ Almgren-Chriss market impact, linear and square-root impact, spread costs, turno
 ## Design principles
 
 1. **Pure functions.** Every public API is data in, results out. No database, no network, no global state. Trivially testable and reproducible.
+1. **DataFrame-native, dependency-lean.** Polars and pandas DataFrames work everywhere returns go; neither library is imported unless you pass one, and pandas is never a dependency.
 2. **Fail loudly.** No silent fallbacks, no fabricated defaults. Missing solver, degenerate covariance, or invalid input raises with an actionable message.
 3. **Typed end to end.** `py.typed`, mypy-checked in CI, pydantic result models where structure matters.
 4. **Certification is not optional.** The same anti-overfitting gates that certify strategies on the CPZAI operating system are open source here, so any grade can be independently reproduced.
@@ -129,7 +145,10 @@ Almgren-Chriss market impact, linear and square-root impact, spread costs, turno
 ## FAQ
 
 **How do I do portfolio optimization in Python with cpz-quant?**
-`pip install cpz-quant`, then call any allocator in `cpz_quant.portfolio` with a dict of return series (see quickstart above). All 20+ methods share the same input shape and return an `OptResult` with weights, expected return, volatility, and Sharpe ratio.
+`pip install cpz-quant`, then call any allocator in `cpz_quant.portfolio` with your returns as a Polars DataFrame, pandas DataFrame, or dict of series (see quickstart above). All 20+ methods share the same input shape and return an `OptResult` with weights, expected return, volatility, and Sharpe ratio.
+
+**Does cpz-quant work with Polars and pandas?**
+Yes, natively: every allocator, covariance estimator, and pre-selection transformer accepts a Polars or pandas DataFrame directly (numeric columns become assets; date/string columns are excluded as labels). Polars is a core dependency; pandas is supported but never required.
 
 **Does cpz-quant support Hierarchical Risk Parity (HRP) and HERC?**
 Yes: `hierarchical_risk_parity`, `hierarchical_equal_risk_contribution`, plus NCO and Schur complementary allocation for nested and cluster-aware variants.

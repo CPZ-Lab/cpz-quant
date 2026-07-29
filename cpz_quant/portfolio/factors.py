@@ -10,6 +10,8 @@ from typing import Dict, List, Optional
 import numpy as np
 from pydantic import BaseModel, Field
 
+from cpz_quant.frames import frame_friendly
+
 TRADING_DAYS: int = 252
 EPSILON: float = 1e-15
 
@@ -44,6 +46,7 @@ class FactorRiskDecomp(BaseModel):
     per_factor_contribution: Dict[str, float] = Field(default_factory=dict)
 
 
+@frame_friendly
 def statistical_factor_model(
     returns: Dict[str, List[float]],
     *,
@@ -98,6 +101,7 @@ def statistical_factor_model(
     )
 
 
+@frame_friendly
 def fundamental_factors(
     returns: Dict[str, List[float]],
     market_caps: Dict[str, float],
@@ -258,6 +262,7 @@ def factor_risk_decomposition(
     )
 
 
+@frame_friendly
 def rolling_factor_exposure(
     returns: Dict[str, List[float]],
     factor_returns: Dict[str, List[float]],

@@ -11,6 +11,8 @@ from typing import Dict, List
 import numpy as np
 from pydantic import BaseModel, Field
 
+from cpz_quant.frames import frame_friendly
+
 TRADING_DAYS: int = 252
 EPSILON: float = 1e-15
 
@@ -29,6 +31,7 @@ class FactorCovResult(BaseModel):
     n_factors: int = 0
 
 
+@frame_friendly
 def sample_cov(
     returns: Dict[str, List[float]],
     *,
@@ -55,6 +58,7 @@ def sample_cov(
     return cov
 
 
+@frame_friendly
 def ledoit_wolf(
     returns: Dict[str, List[float]],
     *,
@@ -131,6 +135,7 @@ def ledoit_wolf(
     )
 
 
+@frame_friendly
 def oracle_approximating(
     returns: Dict[str, List[float]],
     *,
@@ -170,6 +175,7 @@ def oracle_approximating(
     return result
 
 
+@frame_friendly
 def ewma_cov(
     returns: Dict[str, List[float]],
     *,
@@ -207,6 +213,7 @@ def ewma_cov(
     return cov
 
 
+@frame_friendly
 def factor_model_cov(
     returns: Dict[str, List[float]],
     *,
@@ -260,6 +267,7 @@ def factor_model_cov(
     )
 
 
+@frame_friendly
 def denoise_mp(
     returns: Dict[str, List[float]],
     *,
@@ -316,6 +324,7 @@ def denoise_mp(
     return result
 
 
+@frame_friendly
 def gerber_cov(
     returns: Dict[str, List[float]],
     *,
@@ -378,6 +387,7 @@ def gerber_cov(
     return result
 
 
+@frame_friendly
 def detone_cov(
     returns: Dict[str, List[float]],
     *,

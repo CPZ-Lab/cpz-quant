@@ -13,6 +13,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 from scipy import optimize as sp_opt
 
+from cpz_quant.frames import frame_friendly
+
 EPSILON: float = 1e-15
 TRADING_DAYS: int = 252
 
@@ -105,6 +107,7 @@ def _metrics(w: np.ndarray, mu: np.ndarray, cov: np.ndarray, rf: float, ids: Lis
 
 # ── Core optimisers ─────────────────────────────────────────────────
 
+@frame_friendly
 def mean_variance(
     returns: Dict[str, List[float]],
     *,
@@ -136,6 +139,7 @@ def mean_variance(
     return r
 
 
+@frame_friendly
 def min_variance(
     returns: Dict[str, List[float]],
     *,
@@ -160,6 +164,7 @@ def min_variance(
     return r
 
 
+@frame_friendly
 def max_sharpe(
     returns: Dict[str, List[float]],
     *,
@@ -186,6 +191,7 @@ def max_sharpe(
     return r
 
 
+@frame_friendly
 def risk_parity(
     returns: Dict[str, List[float]],
     *,
@@ -332,6 +338,7 @@ def black_litterman(
     )
 
 
+@frame_friendly
 def hierarchical_risk_parity(
     returns: Dict[str, List[float]],
     *,
@@ -479,6 +486,7 @@ def _recursive_bisection(cov_mat: np.ndarray, order: list) -> np.ndarray:
     return w
 
 
+@frame_friendly
 def hierarchical_equal_risk_contribution(
     returns: Dict[str, List[float]],
     *,
@@ -599,6 +607,7 @@ def _cluster_labels(cov: np.ndarray, linkage_method: str, n_clusters):
     return labels, order
 
 
+@frame_friendly
 def nested_clustered_optimization(
     returns: Dict[str, List[float]],
     *,
@@ -663,6 +672,7 @@ def nested_clustered_optimization(
     return r
 
 
+@frame_friendly
 def schur_complementary_allocation(
     returns: Dict[str, List[float]],
     *,
@@ -742,6 +752,7 @@ def schur_complementary_allocation(
     return r
 
 
+@frame_friendly
 def mean_cvar(
     returns: Dict[str, List[float]],
     *,
@@ -790,6 +801,7 @@ def mean_cvar(
     return r
 
 
+@frame_friendly
 def robust_mvo(
     returns: Dict[str, List[float]],
     *,
@@ -834,6 +846,7 @@ def robust_mvo(
     return r
 
 
+@frame_friendly
 def max_diversification(
     returns: Dict[str, List[float]],
     *,
@@ -864,6 +877,7 @@ def max_diversification(
     return r
 
 
+@frame_friendly
 def min_tracking_error(
     returns: Dict[str, List[float]],
     benchmark_weights: Dict[str, float],
@@ -896,6 +910,7 @@ def min_tracking_error(
     return r
 
 
+@frame_friendly
 def turnover_penalized(
     returns: Dict[str, List[float]],
     current_weights: Dict[str, float],
@@ -1169,6 +1184,7 @@ def _optimal_bisect(similarity: np.ndarray, indices: List[int]) -> Tuple[List[in
     return indices[:best_split], indices[best_split:]
 
 
+@frame_friendly
 def quantum_inspired_hrp(
     returns: Dict[str, List[float]],
     *,
@@ -1351,6 +1367,7 @@ def build_portfolio_qubo(
     return Q
 
 
+@frame_friendly
 def qubo_portfolio_selection(
     returns: Dict[str, List[float]],
     *,

@@ -11,6 +11,8 @@ from typing import Dict, List, Mapping, Sequence
 
 import numpy as np
 
+from cpz_quant.frames import frame_friendly
+
 EPSILON = 1e-15
 TRADING_DAYS = 252
 
@@ -26,12 +28,14 @@ def _subset(returns: Mapping[str, Sequence[float]], keep: List[str]) -> Dict[str
     return {k: list(returns[k]) for k in keep}
 
 
+@frame_friendly
 def drop_zero_variance(returns, *, tol: float = 1e-12) -> Dict[str, list]:
     """Drop assets whose return variance is (near) zero."""
     keep = [i for i in returns if np.var(np.asarray(returns[i], dtype=float)) > tol]
     return _subset(returns, keep)
 
 
+@frame_friendly
 def select_complete_assets(returns, *, min_obs: int = None) -> Dict[str, list]:  # type: ignore[assignment]
     """Keep only assets with a full (longest common) history — drops names with
     short samples from inception/delisting. If ``min_obs`` is given, keep assets
@@ -44,6 +48,7 @@ def select_complete_assets(returns, *, min_obs: int = None) -> Dict[str, list]: 
     return _subset(returns, keep)
 
 
+@frame_friendly
 def drop_highly_correlated(returns, *, threshold: float = 0.95) -> Dict[str, list]:
     """Greedily drop one asset from every pair with ``|corr| > threshold``.
 
@@ -79,6 +84,7 @@ def drop_highly_correlated(returns, *, threshold: float = 0.95) -> Dict[str, lis
     return _subset(returns, keep)
 
 
+@frame_friendly
 def select_k_extremes(returns, *, k: int, measure: str = "sharpe", highest: bool = True) -> Dict[str, list]:
     """Keep the ``k`` assets with the highest (or lowest) ranking metric.
 
@@ -106,6 +112,7 @@ def select_k_extremes(returns, *, k: int, measure: str = "sharpe", highest: bool
     return _subset(returns, keep)
 
 
+@frame_friendly
 def select_non_dominated(returns, *, risk_measure: str = "volatility") -> Dict[str, list]:
     """Keep the Pareto-efficient assets: no other asset has both a higher mean
     return AND a lower risk. Removes strictly dominated names."""

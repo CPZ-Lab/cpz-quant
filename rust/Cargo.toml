@@ -1,0 +1,16 @@
+[package]
+name = "cpz-risk-rs"
+version = "0.2.0"
+edition = "2021"
+description = "Rust acceleration for CPZ Analytics — indicators, covariance, portfolio, risk"
+
+[lib]
+name = "cpz_risk_rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.22", features = ["extension-module"] }
+rand = "0.8"
+rand_distr = "0.4"
+rayon = "1.10"
+ndarray = "0.16"

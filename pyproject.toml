@@ -66,12 +66,14 @@ sklearn = ["scikit-learn>=1.3"]
 cvx = ["cvxpy>=1.4"]
 cvx-mip = ["cvxpy>=1.4", "PySCIPOpt>=4.3"]
 quantum = ["dwave-neal>=0.6", "dimod>=0.12"]
+viz = ["plotly>=5.18"]
 all = [
   "scikit-learn>=1.3",
   "cvxpy>=1.4",
   "PySCIPOpt>=4.3",
   "dwave-neal>=0.6",
   "dimod>=0.12",
+  "plotly>=5.18",
 ]
 dev = [
   "pytest",
@@ -82,6 +84,7 @@ dev = [
   "isort",
   "scikit-learn>=1.3",
   "cvxpy>=1.4",
+  "plotly>=5.18",
   "mkdocs-material>=9",
 ]
 

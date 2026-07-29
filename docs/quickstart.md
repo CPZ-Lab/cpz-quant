@@ -7,24 +7,35 @@ pip install cpz-quant              # core: numpy, scipy, polars, pydantic
 pip install "cpz-quant[sklearn]"   # + scikit-learn estimator wrappers
 pip install "cpz-quant[cvx]"       # + cvxpy convex backend
 pip install "cpz-quant[cvx-mip]"   # + SCIP for cardinality constraints
+pip install "cpz-quant[quantum]"   # + simulated annealing (dwave-neal)
+pip install "cpz-quant[viz]"       # + plotly figures
 pip install "cpz-quant[all]"       # everything
 ```
 
 Python 3.9+ on any OS.
 
+## Input formats
+
+Every allocator, covariance estimator, and pre-selection transformer accepts your per-asset daily returns as any of:
+
+- **Polars DataFrame** (recommended): numeric columns become assets; date and string columns are treated as labels and excluded
+- **pandas DataFrame**: same behavior, and pandas is never a required dependency
+- **`{asset: [returns]}` dict**: the internal wire format
+
+`cpz_quant.as_returns(data)` exposes the coercion directly if you want it.
+
 ## Your first optimization
 
-Every allocator takes the same input: a dict of per-asset return series.
-
 ```python
+import polars as pl
 from cpz_quant.portfolio import hierarchical_risk_parity, max_sharpe, risk_parity
 
-returns = {
+returns = pl.DataFrame({
     "AAPL": [...],   # daily returns, e.g. from your data vendor
     "MSFT": [...],
     "TLT":  [...],
     "GLD":  [...],
-}
+})
 
 hrp = hierarchical_risk_parity(returns)
 print(hrp.weights)          # {"AAPL": 0.18, "MSFT": 0.17, "TLT": 0.40, "GLD": 0.25}

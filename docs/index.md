@@ -10,7 +10,9 @@ Everything is a pure function: data in, results out. No I/O, no hidden state, fu
 
 ## Why cpz-quant
 
-- **20+ portfolio allocators** sharing one input shape: mean-variance, HRP, HERC, NCO, Schur, Black-Litterman, entropy pooling, mean-CVaR, robust MVO, risk parity, alpha-risk-cost, QUBO, and more.
+- **20+ portfolio allocators** sharing one input shape: mean-variance, HRP, HERC, NCO, Schur, Black-Litterman, entropy pooling, mean-CVaR, robust MVO, risk parity, alpha-risk-cost, QUBO/quantum-inspired, and more.
+- **DataFrame-native.** Polars and pandas DataFrames work everywhere returns go; pandas is never a required dependency.
+- **Rust-accelerated.** The bundled `cpz_risk_rs` crate (PyO3 + rayon) speeds up certification analytics, covariance, and indicators, with parity-tested NumPy fallbacks.
 - **A certification layer.** Probability of Backtest Overfitting (CSCV), Deflated Sharpe Ratio gates, and regime-conditional analytics turn "trust me, it backtests well" into a reproducible grade.
 - **Exact convex programs** when you need hard constraints: cardinality, turnover, gross exposure, and robust uncertainty sets via the optional cvxpy backend.
 - **Battle-tested.** This is the research core that powers the CPZAI systematic trading operating system in production.

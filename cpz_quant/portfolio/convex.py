@@ -28,6 +28,8 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
+from cpz_quant.frames import frame_friendly
+
 from .optimization import (
     EPSILON,
     Constraints,
@@ -95,6 +97,7 @@ def _solve_or_raise(problem: "cp.Problem", label: str) -> None:
         raise RuntimeError(f"{label}: solver returned status '{problem.status}'")
 
 
+@frame_friendly
 def mean_variance_cvx(
     returns: Dict[str, List[float]],
     *,
@@ -136,6 +139,7 @@ def mean_variance_cvx(
     return result
 
 
+@frame_friendly
 def mean_cvar_cvx(
     returns: Dict[str, List[float]],
     *,
@@ -182,6 +186,7 @@ def mean_cvar_cvx(
     return result
 
 
+@frame_friendly
 def robust_mean_variance_cvx(
     returns: Dict[str, List[float]],
     *,
@@ -253,6 +258,7 @@ def _mip_solver() -> str:
     )
 
 
+@frame_friendly
 def cardinality_constrained_cvx(
     returns: Dict[str, List[float]],
     *,
