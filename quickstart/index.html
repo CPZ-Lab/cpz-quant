@@ -360,6 +360,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#input-formats" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Input formats
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#your-first-optimization" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -595,6 +606,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#input-formats" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Input formats
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#your-first-optimization" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -675,19 +697,29 @@
 pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;cpz-quant[sklearn]&quot;</span><span class="w">   </span><span class="c1"># + scikit-learn estimator wrappers</span>
 pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;cpz-quant[cvx]&quot;</span><span class="w">       </span><span class="c1"># + cvxpy convex backend</span>
 pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;cpz-quant[cvx-mip]&quot;</span><span class="w">   </span><span class="c1"># + SCIP for cardinality constraints</span>
+pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;cpz-quant[quantum]&quot;</span><span class="w">   </span><span class="c1"># + simulated annealing (dwave-neal)</span>
+pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;cpz-quant[viz]&quot;</span><span class="w">       </span><span class="c1"># + plotly figures</span>
 pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;cpz-quant[all]&quot;</span><span class="w">       </span><span class="c1"># everything</span>
 </code></pre></div>
 <p>Python 3.9+ on any OS.</p>
+<h2 id="input-formats">Input formats<a class="headerlink" href="#input-formats" title="Permanent link">&para;</a></h2>
+<p>Every allocator, covariance estimator, and pre-selection transformer accepts your per-asset daily returns as any of:</p>
+<ul>
+<li><strong>Polars DataFrame</strong> (recommended): numeric columns become assets; date and string columns are treated as labels and excluded</li>
+<li><strong>pandas DataFrame</strong>: same behavior, and pandas is never a required dependency</li>
+<li><strong><code>{asset: [returns]}</code> dict</strong>: the internal wire format</li>
+</ul>
+<p><code>cpz_quant.as_returns(data)</code> exposes the coercion directly if you want it.</p>
 <h2 id="your-first-optimization">Your first optimization<a class="headerlink" href="#your-first-optimization" title="Permanent link">&para;</a></h2>
-<p>Every allocator takes the same input: a dict of per-asset return series.</p>
-<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">cpz_quant.portfolio</span><span class="w"> </span><span class="kn">import</span> <span class="n">hierarchical_risk_parity</span><span class="p">,</span> <span class="n">max_sharpe</span><span class="p">,</span> <span class="n">risk_parity</span>
+<div class="highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">polars</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pl</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">cpz_quant.portfolio</span><span class="w"> </span><span class="kn">import</span> <span class="n">hierarchical_risk_parity</span><span class="p">,</span> <span class="n">max_sharpe</span><span class="p">,</span> <span class="n">risk_parity</span>
 
-<span class="n">returns</span> <span class="o">=</span> <span class="p">{</span>
+<span class="n">returns</span> <span class="o">=</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">({</span>
     <span class="s2">&quot;AAPL&quot;</span><span class="p">:</span> <span class="p">[</span><span class="o">...</span><span class="p">],</span>   <span class="c1"># daily returns, e.g. from your data vendor</span>
     <span class="s2">&quot;MSFT&quot;</span><span class="p">:</span> <span class="p">[</span><span class="o">...</span><span class="p">],</span>
     <span class="s2">&quot;TLT&quot;</span><span class="p">:</span>  <span class="p">[</span><span class="o">...</span><span class="p">],</span>
     <span class="s2">&quot;GLD&quot;</span><span class="p">:</span>  <span class="p">[</span><span class="o">...</span><span class="p">],</span>
-<span class="p">}</span>
+<span class="p">})</span>
 
 <span class="n">hrp</span> <span class="o">=</span> <span class="n">hierarchical_risk_parity</span><span class="p">(</span><span class="n">returns</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="n">hrp</span><span class="o">.</span><span class="n">weights</span><span class="p">)</span>          <span class="c1"># {&quot;AAPL&quot;: 0.18, &quot;MSFT&quot;: 0.17, &quot;TLT&quot;: 0.40, &quot;GLD&quot;: 0.25}</span>
