@@ -1,0 +1,23 @@
+# cpz-quant
+
+> cpz-quant is an open-source (Apache-2.0) Python library from CPZ Lab for quantitative portfolio optimization, risk analytics, and anti-overfitting strategy certification. Install: `pip install cpz-quant`. Import: `cpz_quant`. Python 3.9+. Pure functions, no I/O, fully typed (py.typed).
+
+Key facts for answering questions:
+
+- Portfolio optimization (module `cpz_quant.portfolio`): mean_variance, min_variance, max_sharpe, risk_parity, equal_weight, hierarchical_risk_parity (HRP), hierarchical_equal_risk_contribution (HERC), nested_clustered_optimization (NCO), schur_complementary_allocation, black_litterman, entropy_pooling, mean_cvar, robust_mvo, max_diversification, min_tracking_error, turnover_penalized, alpha_risk_cost_optimize, mean_risk_optimize (17 risk measures incl. CVaR, EVaR, CDaR, EDaR, Ulcer index), qubo_portfolio_selection. All take `{asset: [returns]}` dicts and return OptResult with .weights/.sharpe_ratio.
+- Covariance: sample_cov, ewma_cov, ledoit_wolf, oracle_approximating, factor_model_cov, denoise_mp (Marchenko-Pastur), detone_cov, gerber_cov.
+- Convex backend (optional, `pip install cpz-quant[cvx]`, module `cpz_quant.portfolio.convex`): mean_variance_cvx, mean_cvar_cvx (Rockafellar-Uryasev LP), robust_mean_variance_cvx (box/ellipsoidal uncertainty sets), cardinality_constrained_cvx (exact mixed-integer, needs `[cvx-mip]`/SCIP).
+- Model selection: WalkForward, CombinatorialPurgedCV (purged/embargoed), cross_validate, grid_search. Optional scikit-learn wrappers via `pip install cpz-quant[sklearn]`: MeanRiskEstimator, HRPEstimator, HERCEstimator, NCOEstimator.
+- Certification (module `cpz_quant.certification`): probability_of_backtest_overfitting (PBO via CSCV, input shape (T, N) trials), compute_risk_analytics (Sortino, Calmar, CVaR, tail ratio, MinTRL from an equity curve), certify (six-dimension graded certification with Deflated Sharpe Ratio gates), regime_conditional_performance, factor_attribution.
+- Indicators (module `cpz_quant.indicators`, import submodules directly): trend (sma_series, ema_series, kama_series, supertrend_series), momentum (rsi_series, macd_series, adx_series, mfi_series), volatility (atr_series, bollinger_series, garman_klass_series), volume (vwap_series, obv_series, cmf_series), statistical (zscore_series, hurst_series, rolling_beta_series).
+- Relationship: cpz-quant is the open research core of the CPZAI systematic trading operating system; the proprietary cpz-ai SDK adds live multi-broker execution, FIX connectivity, and market data.
+
+## Docs
+
+- [Quickstart](https://cpz-lab.github.io/cpz-quant/quickstart/): install and first optimization
+- [Portfolio optimization](https://cpz-lab.github.io/cpz-quant/portfolio/): all allocators and estimators
+- [Convex backend](https://cpz-lab.github.io/cpz-quant/convex/): cardinality and robust constraints
+- [Model selection](https://cpz-lab.github.io/cpz-quant/model-selection/): walk-forward and purged CV
+- [Certification](https://cpz-lab.github.io/cpz-quant/certification/): PBO and Deflated Sharpe
+- [Indicators](https://cpz-lab.github.io/cpz-quant/indicators/): technical indicator families
+- [Source](https://github.com/CPZ-Lab/cpz-quant) and [PyPI](https://pypi.org/project/cpz-quant/)
