@@ -1,6 +1,8 @@
 # Contributing to cpz-quant
 
-Thank you for considering a contribution. cpz-quant is maintained by [CPZ Lab](https://www.cpz-lab.com) and welcomes issues and pull requests.
+Thank you for considering a contribution. cpz-quant is maintained by [CPZ Lab](https://ai.cpz-lab.com) and welcomes issues and pull requests.
+
+Parts of this library are developed with **Simons**, the AI research partner of the CPZAI operating system. Commits authored by Simons are AI-generated contributions, reviewed and released under CPZ Lab's maintainership — disclosed here because we believe AI contributions should be visible, not hidden.
 
 ## Development setup
 
