@@ -12,6 +12,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="License: Apache-2.0"></a>
   <a href="pyproject.toml"><img src="https://img.shields.io/badge/python-3.9%20%7C%203.10%20%7C%203.11%20%7C%203.12-informational" alt="Python 3.9-3.12"></a>
   <a href="pyproject.toml"><img src="https://img.shields.io/badge/typing-py.typed-informational" alt="Typed"></a>
+  <a href="rust/"><img src="https://img.shields.io/badge/rust-accelerated-CE422B?logo=rust&logoColor=white" alt="Rust-accelerated"></a>
 </p>
 
 <p align="center">
@@ -161,6 +162,9 @@ Yes, optionally: `pip install cpz-quant[sklearn]` provides estimator wrappers th
 
 **How does cpz-quant relate to the cpz-ai SDK?**
 cpz-quant is the open-source research core (Apache-2.0). The proprietary [cpz-ai SDK](https://pypi.org/project/cpz-ai/) builds on it and adds live multi-broker execution, FIX connectivity, market data access, and the CPZAI operating system integration. Research is open; execution is a product.
+
+**Is AI used in developing cpz-quant?**
+Yes, and it is disclosed: parts of the library are developed with Simons, the AI research partner of the CPZAI operating system, under CPZ Lab's review and maintainership. AI-authored commits carry the git identity `Simons <simons@cpz-lab.com>` so provenance is auditable, in line with the transparency expectations of the EU AI Act, the NIST AI Risk Management Framework, and ISO/IEC 42001. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 **Is this investment advice?**
 No. cpz-quant is a software library for quantitative research. Nothing in it constitutes investment advice.

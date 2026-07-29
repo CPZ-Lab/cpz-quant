@@ -2,7 +2,11 @@
 
 Thank you for considering a contribution. cpz-quant is maintained by [CPZ Lab](https://ai.cpz-lab.com) and welcomes issues and pull requests.
 
-Parts of this library are developed with **Simons**, the AI research partner of the CPZAI operating system. Commits authored by Simons are AI-generated contributions, reviewed and released under CPZ Lab's maintainership — disclosed here because we believe AI contributions should be visible, not hidden.
+## AI contribution disclosure
+
+Parts of this library are developed with **Simons**, the AI research partner of the CPZAI operating system. Commits authored by Simons are AI-generated contributions, reviewed and released under CPZ Lab's maintainership.
+
+We disclose this both as a matter of principle — AI contributions should be visible, not hidden — and in line with the transparency expectations of applicable AI governance frameworks: the **EU AI Act**'s transparency obligations for AI-generated content (Regulation (EU) 2024/1689, Art. 50), the **NIST AI Risk Management Framework**'s transparency and provenance characteristics (which CPZ Lab applies across the CPZAI operating system), and the AI-lifecycle accountability practices of **ISO/IEC 42001**. Attribution is machine-readable: AI-authored commits carry the distinct git author identity `Simons <simons@cpz-lab.com>`, so provenance can be audited commit by commit.
 
 ## Development setup
 
