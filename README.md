@@ -9,8 +9,9 @@
 <p align="center"><b>Portfolio optimization, risk analytics, and strategy certification in Python</b></p>
 
 <p align="center">
+  <a href="https://pypi.org/project/cpz-quant/"><img src="https://img.shields.io/pypi/v/cpz-quant" alt="PyPI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="License: Apache-2.0"></a>
-  <a href="pyproject.toml"><img src="https://img.shields.io/badge/python-3.9%20%7C%203.10%20%7C%203.11%20%7C%203.12-informational" alt="Python 3.9-3.12"></a>
+  <a href="https://pypi.org/project/cpz-quant/"><img src="https://img.shields.io/pypi/pyversions/cpz-quant" alt="Python versions"></a>
   <a href="pyproject.toml"><img src="https://img.shields.io/badge/typing-py.typed-informational" alt="Typed"></a>
   <a href="rust/"><img src="https://img.shields.io/badge/rust-accelerated-CE422B?logo=rust&logoColor=white" alt="Rust-accelerated"></a>
 </p>
