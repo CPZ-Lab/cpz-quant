@@ -157,8 +157,17 @@ def min_variance(
     x0 = np.ones(n) / n
     result = sp_opt.minimize(objective, x0, method="SLSQP", bounds=bounds, constraints=cons,
                              options={"maxiter": 500, "ftol": 1e-12})
-    w = np.abs(result.x)
-    w /= max(np.sum(w), EPSILON)
+    # Do not abs() — that silently flips shorts to longs without re-solving.
+    # If long_only=False, negative weights are valid; if long_only=True, bounds already enforce >=0.
+    # Fall back to equal-weight only on optimizer failure / zero-sum.
+    if not result.success or np.sum(result.x) < EPSILON:
+        w = np.ones(n) / n
+    else:
+        w = result.x / max(np.sum(result.x), EPSILON)
+        # For long_only, clip tiny negatives from solver tolerance
+        if constraints and getattr(constraints, 'long_only', True):
+            w = np.maximum(w, 0)
+            w /= max(np.sum(w), EPSILON)
     r = _metrics(w, mu, cov, 0.0, ids)
     r.method = "min_variance"
     return r
