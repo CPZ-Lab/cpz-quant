@@ -164,8 +164,8 @@ def min_variance(
         w = np.ones(n) / n
     else:
         w = result.x / max(np.sum(result.x), EPSILON)
-        # For long_only, clip tiny negatives from solver tolerance
-        if constraints and getattr(constraints, 'long_only', True):
+        # For long_only, clip tiny negatives from solver tolerance (default is False, not True)
+        if constraints is not None and getattr(constraints, 'long_only', False):
             w = np.maximum(w, 0)
             w /= max(np.sum(w), EPSILON)
     r = _metrics(w, mu, cov, 0.0, ids)
