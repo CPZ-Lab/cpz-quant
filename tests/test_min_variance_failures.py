@@ -53,7 +53,7 @@ def test_short_weights_match_closed_form_minimum_variance():
     expected = inv_ones / inv_ones.sum()
     result = min_variance(
         {"a": sample[:, 0].tolist(), "b": sample[:, 1].tolist()},
-        constraints=Constraints(long_only=False, min_weight=-2, max_weight=2),
+        constraints=Constraints(long_only=False, min_weight=-2, max_weight=2, max_gross_exposure=4),
     )
     assert result.weights["b"] < 0
     np.testing.assert_allclose(list(result.weights.values()), expected, atol=2e-6)

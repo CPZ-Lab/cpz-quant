@@ -75,29 +75,25 @@ class TestQuantumInspiredHRP:
         with pytest.raises(ValueError, match="Unknown backend"):
             quantum_inspired_hrp(SAMPLE_RETURNS, backend="nonsense")
 
-    def test_nan_inf_returns_do_not_crash(self):
-        """Regression: NaN/Inf in returns should not crash linkage."""
+    def test_nan_inf_returns_raise_before_linkage(self):
+        """Missing/invalid returns must not become fabricated zero observations."""
         dirty = {
             "A": [0.01, float("nan"), 0.008, 0.002, -0.003] * 50,
             "B": [-0.002, 0.004, float("inf"), 0.003, 0.005] * 50,
             "C": [0.003, 0.001, -0.002, 0.004, 0.002] * 50,
         }
-        result = quantum_inspired_hrp(dirty, backend="heuristic")
-        assert result.method == "quantum_inspired_hrp"
-        assert abs(sum(result.weights.values()) - 1.0) < 1e-6
-        assert all(np.isfinite(w) for w in result.weights.values())
+        with pytest.raises(ValueError, match="finite"):
+            quantum_inspired_hrp(dirty, backend="heuristic")
 
-    def test_nan_inf_hrp_does_not_crash(self):
-        """Regression: hierarchical_risk_parity must survive NaN/Inf returns."""
+    def test_nan_inf_hrp_raises_before_linkage(self):
+        """HRP rejects invalid observations instead of silently sanitizing them."""
         dirty = {
             "X": [0.01, float("nan"), 0.008, 0.002, -0.003] * 50,
             "Y": [-0.002, 0.004, float("inf"), 0.003, 0.005] * 50,
             "Z": [0.003, 0.001, -0.002, 0.004, 0.002] * 50,
         }
-        result = hierarchical_risk_parity(dirty)
-        assert result.method == "hierarchical_risk_parity"
-        assert abs(sum(result.weights.values()) - 1.0) < 1e-6
-        assert all(np.isfinite(w) for w in result.weights.values())
+        with pytest.raises(ValueError, match="finite"):
+            hierarchical_risk_parity(dirty)
 
     def test_constant_returns_do_not_crash(self):
         """Zero-variance asset should not produce NaN in distance matrix."""

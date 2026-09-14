@@ -4,6 +4,10 @@ All notable changes to cpz-quant are documented here. The format follows [Keep a
 
 ## [1.1.0] - 2026-09-14
 
+- Core mean/min-variance and max-Sharpe optimizers enforce positive long-only
+  weight floors and gross limits, reject unsupported constraints, and validate
+  solver results without rounding positions or substituting allocations.
+  Shared covariance preparation rejects non-finite or insufficient data.
 - Minimum-variance optimization now raises when the solver fails or returns
   non-finite, unnormalized, or out-of-bounds weights. Infeasible constraints
   no longer silently produce an equal-weight portfolio.
