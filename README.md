@@ -33,19 +33,22 @@ pip install cpz-quant
 ## 60-second quickstart
 
 ```python
+import numpy as np
 import polars as pl
 from cpz_quant.portfolio import (
-    hierarchical_risk_parity, black_litterman, mean_cvar,
-    ledoit_wolf, WalkForward, cross_validate,
+    hierarchical_risk_parity, mean_cvar, WalkForward, cross_validate,
 )
 
 # Daily returns per asset. Every function accepts a Polars DataFrame,
 # a pandas DataFrame, or a plain {asset: [returns]} dict — date/string
 # columns are treated as labels and excluded automatically.
+# Synthetic demonstration inputs; replace with aligned market returns.
+# 756 observations leave enough training data for four 63-day test folds.
+rng = np.random.default_rng(7)
 returns = pl.DataFrame({
-    "AAPL": [0.012, -0.004, 0.007],
-    "MSFT": [0.008,  0.002, -0.001],
-    "TLT":  [-0.002, 0.005, 0.001],
+    "asset_a": rng.normal(0.0003, 0.012, 756),
+    "asset_b": rng.normal(0.0002, 0.010, 756),
+    "asset_c": rng.normal(0.0001, 0.006, 756),
 })
 
 # Hierarchical Risk Parity: clustering-based allocation, no matrix inversion
@@ -58,7 +61,7 @@ cvar = mean_cvar(returns, confidence=0.95)
 # Walk-forward cross-validation of any allocator
 cv = cross_validate(
     lambda train: hierarchical_risk_parity(train).weights,
-    returns,
+    returns.to_dict(as_series=False),
     cv=WalkForward(n_splits=4, test_size=63),
 )
 print(cv.oos_sharpe)
@@ -164,9 +167,6 @@ Yes, optionally: `pip install cpz-quant[sklearn]` provides estimator wrappers th
 **How does cpz-quant relate to the cpz-ai SDK?**
 cpz-quant is the open-source research core (Apache-2.0). The proprietary [cpz-ai SDK](https://pypi.org/project/cpz-ai/) builds on it and adds live multi-broker execution, FIX connectivity, market data access, and the CPZAI operating system integration. Research is open; execution is a product.
 
-**Is AI used in developing cpz-quant?**
-Yes, and it is disclosed: parts of the library are developed with Simons, the AI research partner of the CPZAI operating system, under CPZ Lab's review and maintainership. AI-authored commits carry the git identity `Simons <simons@cpz-lab.com>` so provenance is auditable, in line with the transparency expectations of the EU AI Act, the NIST AI Risk Management Framework, and ISO/IEC 42001. See [CONTRIBUTING.md](CONTRIBUTING.md).
-
 **Is this investment advice?**
 No. cpz-quant is a software library for quantitative research. Nothing in it constitutes investment advice.
 
@@ -182,7 +182,7 @@ Full documentation: **https://cpz-lab.github.io/cpz-quant/**
 
 ## Contributing
 
-Contributions are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md). The library is tested on Python 3.9 to 3.12 with lint, type-check, and branch-coverage gates enforced in CI.
+Contributions are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md). The CI configuration targets Python 3.9 to 3.12 with lint, type-check, and branch-coverage gates. Release verification must include successful test results; a configured workflow alone is not evidence that it ran.
 
 ## Citation
 

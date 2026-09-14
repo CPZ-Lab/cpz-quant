@@ -2,12 +2,6 @@
 
 Thank you for considering a contribution. cpz-quant is maintained by [CPZ Lab](https://ai.cpz-lab.com) and welcomes issues and pull requests.
 
-## AI contribution disclosure
-
-Parts of this library are developed with **Simons**, the AI research partner of the CPZAI operating system. Commits authored by Simons are AI-generated contributions, reviewed and released under CPZ Lab's maintainership.
-
-We disclose this both as a matter of principle — AI contributions should be visible, not hidden — and in line with the transparency expectations of applicable AI governance frameworks: the **EU AI Act**'s transparency obligations for AI-generated content (Regulation (EU) 2024/1689, Art. 50), the **NIST AI Risk Management Framework**'s transparency and provenance characteristics (which CPZ Lab applies across the CPZAI operating system), and the AI-lifecycle accountability practices of **ISO/IEC 42001**. Attribution is machine-readable: AI-authored commits carry the distinct git author identity `Simons <simons@cpz-lab.com>`, so provenance can be audited commit by commit.
-
 ## Development setup
 
 ```bash
@@ -23,7 +17,7 @@ pytest
 - **Pure functions only.** No network calls, no file I/O, no global state in library code. Data in, results out.
 - **Fail loudly.** Never add a silent fallback or a fabricated default. Missing optional dependencies must raise with install instructions.
 - **Typed.** New code must pass `mypy cpz_quant` and `ruff check` (the configured profiles in `pyproject.toml`; full `--strict` adoption is on the roadmap).
-- **Tested.** New features need tests; CI enforces 80%+ branch coverage on `cpz_quant`.
+- **Tested.** New features need tests; the current whole-package branch-coverage floor is 55%, configured in `pyproject.toml`.
 - **Cite your math.** Non-trivial algorithms should reference the paper or book they implement in the docstring.
 
 ## Pull requests
