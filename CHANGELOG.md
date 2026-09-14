@@ -8,6 +8,10 @@ All notable changes to cpz-quant are documented here. The format follows [Keep a
   weight floors and gross limits, reject unsupported constraints, and validate
   solver results without rounding positions or substituting allocations.
   Shared covariance preparation rejects non-finite or insufficient data.
+- Distinguish CPCV fold counts from complete backtest paths; add deterministic
+  path reconstruction and per-path metrics. Summary metrics now average full
+  path scores instead of pooling overlapping test observations. Invalid folds
+  and non-finite outputs raise; purge/embargo tests now assert real boundaries.
 - Minimum-variance optimization now raises when the solver fails or returns
   non-finite, unnormalized, or out-of-bounds weights. Infeasible constraints
   no longer silently produce an equal-weight portfolio.
