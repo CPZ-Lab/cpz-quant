@@ -32,15 +32,19 @@ class TestCombinatorialPurged:
     def test_number_of_paths(self):
         cv = CombinatorialPurgedCV(n_splits=6, n_test_splits=2)
         folds = list(cv.split(600))
-        assert len(folds) == cv.n_paths() == 15       # C(6,2)
+        assert len(folds) == cv.n_folds() == 15      # C(6,2) fits
+        assert cv.n_paths() == 5                    # C(5,1) complete paths
 
     def test_train_test_disjoint_and_purged(self):
         cv = CombinatorialPurgedCV(n_splits=5, n_test_splits=1, purge=2, embargo=2)
         for tr, te in cv.split(500):
             assert len(set(tr) & set(te)) == 0
             # purged: no train index within `purge` of a test index
+            train_set = set(tr)
             for t in te:
-                assert (t - 1) not in set(tr) or (t + 1) not in set(tr) or True  # boundary blocked
+                for distance in (1, 2):
+                    assert (t - distance) not in train_set
+                    assert (t + distance) not in train_set
 
 
 class TestCrossValidate:
