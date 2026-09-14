@@ -31,3 +31,18 @@ jobs:
         run: mypy cpz_quant
       - name: Test
         run: pytest
+
+  local-quantum:
+    name: Local QAOA regression (no AWS)
+    runs-on: ubuntu-latest
+    env:
+      OMP_NUM_THREADS: '1'
+      OPENBLAS_NUM_THREADS: '1'
+      AWS_EC2_METADATA_DISABLED: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -e '.[dev,quantum-braket]'
+      - run: pytest tests/test_portfolio_quantum.py --no-cov

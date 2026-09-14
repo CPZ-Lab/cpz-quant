@@ -122,7 +122,7 @@ Vectorised momentum, trend, volatility, volume, and statistical indicators on Nu
 
 ### Quantum and quantum-inspired optimization
 
-Portfolio selection as a QUBO problem with pluggable solvers: exact brute force, simulated annealing (`pip install cpz-quant[quantum]`, dwave-neal), and quantum-inspired HRP cluster ordering. `build_portfolio_qubo` exposes the raw QUBO matrix for any annealer. Real quantum hardware (IonQ, Rigetti, IQM via Amazon Braket) runs through the CPZAI operating system with cost gating; the local solvers are fully standalone.
+Portfolio selection as a QUBO problem with pluggable solvers: exact brute force, classical simulated annealing (`pip install cpz-quant[quantum]`), and quantum-inspired HRP cluster ordering. `build_portfolio_qubo` exposes the matrix using x'Qx. Experimental `BraketSolver(device="local", seed=7)` runs genuine gate-model QAOA simulation on CPU with `cpz-quant[quantum-braket]`. Paid AWS simulators and physical QPUs are disabled pending budget enforcement and cost reconciliation. No quantum advantage is claimed. Private CPZAI routing and hedge formulations are not distributed in this package.
 
 ### Rust-accelerated core
 

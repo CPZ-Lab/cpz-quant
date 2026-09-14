@@ -2,6 +2,19 @@
 
 All notable changes to cpz-quant are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.1.0] - 2026-09-14
+
+- Replace misleading Braket-to-classical fallbacks with genuine, seeded local
+  gate-model QAOA simulation. Install the new quantum-braket extra.
+- Paid AWS simulators and physical QPUs now raise NotImplementedError until
+  durable budget enforcement and reconciliation are available. Explicitly use
+  BraketSolver(device="local"); old device aliases no longer return CPU results
+  labeled as hardware execution.
+- Correct simulated-annealing off-diagonal coefficients to match x'Qx and add
+  matrix/finite-number validation. No quantum advantage is claimed.
+- Remove the ineffective quantum usage POST. This standalone library does not
+  bill CPZ accounts. Private routing and hedge formulations are not distributed.
+
 ## [1.0.0] - 2026-07-29
 
 First public release. cpz-quant is the open-source research core of the CPZAI systematic trading operating system, extracted from the cpz-ai SDK and licensed under Apache-2.0.
