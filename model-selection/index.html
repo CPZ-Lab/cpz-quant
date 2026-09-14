@@ -449,6 +449,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Combinatorial purged cross-validation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#result-semantics-and-errors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Result semantics and errors
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -581,6 +598,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Combinatorial purged cross-validation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#result-semantics-and-errors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Result semantics and errors
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -626,7 +660,11 @@
 
 
 <h1 id="model-selection">Model selection<a class="headerlink" href="#model-selection" title="Permanent link">&para;</a></h1>
-<p>Financial samples overlap and trend; naive K-fold cross-validation leaks future information into training folds. <code>cpz_quant.portfolio.model_selection</code> ships splitters built for time series.</p>
+<p>Financial samples can overlap and depend on one another. Random K-fold splits
+can therefore leak information. <code>cpz_quant.portfolio.model_selection</code> provides
+time-ordered and fixed-gap splitters, but choosing a splitter alone does not
+make a backtest leakage-free. Fit preprocessing only on training observations
+and choose gaps that cover the actual feature and label horizons.</p>
 <h2 id="walk-forward">Walk-forward<a class="headerlink" href="#walk-forward" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">cpz_quant.portfolio</span><span class="w"> </span><span class="kn">import</span> <span class="n">WalkForward</span><span class="p">,</span> <span class="n">cross_validate</span><span class="p">,</span> <span class="n">hierarchical_risk_parity</span>
 
@@ -641,7 +679,50 @@
 </code></pre></div>
 <p><code>expanding=True</code> grows the training window each fold; <code>expanding=False</code> rolls it.</p>
 <h2 id="combinatorial-purged-cross-validation">Combinatorial purged cross-validation<a class="headerlink" href="#combinatorial-purged-cross-validation" title="Permanent link">&para;</a></h2>
-<p><code>CombinatorialPurgedCV(n_splits, n_test_splits, purge)</code> evaluates every combination of test blocks and purges observations adjacent to the test boundary, so serial correlation cannot leak between train and test. This is the same machinery behind the <a href="../certification/">PBO certification test</a>.</p>
+<p><code>CombinatorialPurgedCV(n_splits, n_test_splits, purge, embargo)</code> divides the
+observations into contiguous groups and evaluates every combination of held-out
+groups. With <code>N</code> groups and <code>k</code> test groups, there are <code>C(N, k)</code> train/test folds
+but only <code>C(N-1, k-1)</code> complete reconstructed paths. For example, six groups and
+two test groups produce <strong>15 fits and 5 paths</strong>, not 15 independent backtests.
+This distinction follows <a href="https://smallake.kr/wp-content/uploads/2018/07/SSRN-id3104816.pdf">López de Prado's CPCV construction, section 9</a>.</p>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">cpz_quant.portfolio</span><span class="w"> </span><span class="kn">import</span> <span class="n">CombinatorialPurgedCV</span><span class="p">,</span> <span class="n">cross_validate</span>
+
+<span class="n">splitter</span> <span class="o">=</span> <span class="n">CombinatorialPurgedCV</span><span class="p">(</span><span class="mi">6</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="n">purge</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span> <span class="n">embargo</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">splitter</span><span class="o">.</span><span class="n">n_folds</span><span class="p">(),</span> <span class="n">splitter</span><span class="o">.</span><span class="n">n_paths</span><span class="p">())</span>  <span class="c1"># 15, 5</span>
+<span class="n">result</span> <span class="o">=</span> <span class="n">cross_validate</span><span class="p">(</span><span class="n">my_allocator</span><span class="p">,</span> <span class="n">returns</span><span class="p">,</span> <span class="n">splitter</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">result</span><span class="o">.</span><span class="n">per_path_sharpe</span><span class="p">)</span>                 <span class="c1"># five complete-path scores</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">result</span><span class="o">.</span><span class="n">oos_sharpe</span><span class="p">)</span>                      <span class="c1"># their arithmetic mean</span>
+</code></pre></div>
+<p>Each path contains every observation exactly once. The first held-out occurrence
+of each group is assigned to path 0, the second to path 1, and so on. Every
+fold/group output is used once across the paths. Paths still share the original
+observations and are not independent histories. To reconstruct your own outputs,
+call <code>splitter.reconstruct_paths(fold_returns, n_samples)</code>: supply one vector per
+fold in <code>split()</code> order, aligned to that fold's sorted test indices. It returns
+an array shaped <code>(n_paths, n_samples)</code>.</p>
+<p><code>purge</code> removes a fixed number of observations before and after each test group.
+<code>embargo</code> removes observations immediately after each test group. These windows
+overlap, so the right-hand gap is <code>max(purge, embargo)</code>, not their sum. This is
+positional purging, not purging from variable event-label start/end times.
+The gaps do not guarantee the absence of serial dependence or look-ahead bias.
+CPCV may train on groups chronologically after a held-out group; use walk-forward
+for strictly past-to-future training. The certification PBO test uses a separate
+CSCV procedure; it is not this splitter.</p>
+<h3 id="result-semantics-and-errors">Result semantics and errors<a class="headerlink" href="#result-semantics-and-errors" title="Permanent link">&para;</a></h3>
+<p>For CPCV, <code>oos_sharpe</code>, <code>oos_return_ann</code> and <code>oos_vol_ann</code> are arithmetic means
+of complete-path metrics. Their corresponding <code>per_path_*</code> lists expose the
+distribution. <code>n_paths</code> counts complete paths, while <code>n_splits</code>,
+<code>per_split_sharpe</code> and <code>stability()</code> continue to describe fits/folds.
+Walk-forward forms one time-ordered path from held-out observations (omitting
+training-only periods). Returns are annualized with 252 observations per year;
+annual return is arithmetic mean times 252, not CAGR. The existing convention
+of a zero Sharpe score for zero volatility is retained.</p>
+<p>This corrects the earlier CPCV behavior that concatenated repeated observations
+from overlapping folds as if they formed one history. As a result, CPCV summary
+Sharpe/volatility values and <code>n_paths()</code> change. Other custom splitters must have
+disjoint test indices. Invalid settings, fewer than two train/test observations
+per fold, empty cross-validation, non-finite input/output, and incomplete path
+outputs raise instead of silently skipping folds or returning empty scores.</p>
 <h2 id="grid-search">Grid search<a class="headerlink" href="#grid-search" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">cpz_quant.portfolio</span><span class="w"> </span><span class="kn">import</span> <span class="n">grid_search</span><span class="p">,</span> <span class="n">WalkForward</span>
 

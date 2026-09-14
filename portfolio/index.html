@@ -384,6 +384,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Allocators">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#core-optimizer-constraints" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Core optimizer constraints
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -614,6 +631,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Allocators">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#core-optimizer-constraints" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Core optimizer constraints
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -726,7 +760,7 @@
 <tbody>
 <tr>
 <td><code>mean_variance</code></td>
-<td>Markowitz mean-variance; max-Sharpe or min-variance at a target return</td>
+<td>Minimum variance, optionally at an exact target return</td>
 </tr>
 <tr>
 <td><code>min_variance</code></td>
@@ -803,6 +837,23 @@
 </tbody>
 </table>
 <p>The <a href="../convex/">convex backend</a> adds <code>mean_variance_cvx</code>, <code>mean_cvar_cvx</code>, <code>robust_mean_variance_cvx</code>, and <code>cardinality_constrained_cvx</code>.</p>
+<h3 id="core-optimizer-constraints">Core optimizer constraints<a class="headerlink" href="#core-optimizer-constraints" title="Permanent link">&para;</a></h3>
+<p><code>mean_variance</code>, <code>min_variance</code> and <code>max_sharpe</code> require full investment
+(<code>sum(weights) == 1</code>). They enforce <code>min_weight</code>, <code>max_weight</code>, <code>long_only</code>
+and <code>max_gross_exposure</code> (2.0 by default; <code>None</code> disables the gross cap).
+A positive <code>min_weight</code> still applies when <code>long_only=True</code>.
+Because net exposure is fixed at one, <code>max_net_exposure</code> below one is infeasible
+and raises. Sector, factor, turnover and tracking-error limits are not supported
+by these three functions and raise <code>NotImplementedError</code> when supplied.
+Other allocators have different constraint support; consult their APIs.</p>
+<p>These core optimizers raise on failed solvers or invalid returned weights.
+They retain solver precision in <code>weights</code> to avoid rounding away tight limits;
+constraint validation uses an absolute tolerance of <code>1e-7</code>.
+<code>mean_variance</code> minimizes variance even when no target is supplied; use
+<code>max_sharpe</code> to maximize the Sharpe ratio. Its optional <code>target_return</code> is an
+exact annualized decimal return, not a percentage or a lower bound.
+The shared mean/covariance preparation rejects non-finite returns and series
+with fewer than two observations instead of replacing them with zeros.</p>
 <h2 id="risk-measures">Risk measures<a class="headerlink" href="#risk-measures" title="Permanent link">&para;</a></h2>
 <p><code>RiskMeasure</code> covers 17 measures usable with <code>compute_risk</code>, <code>all_risk_measures</code>, and <code>mean_risk_optimize</code>: variance, standard deviation, semi-variance, mean absolute deviation, first lower partial moment, Gini mean difference, VaR, CVaR, EVaR, worst realization, entropic risk, maximum drawdown, average drawdown, drawdown at risk, CDaR, EDaR, and Ulcer index.</p>
 <h2 id="covariance-estimation">Covariance estimation<a class="headerlink" href="#covariance-estimation" title="Permanent link">&para;</a></h2>
