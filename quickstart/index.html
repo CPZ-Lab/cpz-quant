@@ -699,7 +699,8 @@ pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot
 pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;cpz-quant[cvx-mip]&quot;</span><span class="w">   </span><span class="c1"># + SCIP for cardinality constraints</span>
 pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;cpz-quant[quantum]&quot;</span><span class="w">   </span><span class="c1"># + simulated annealing (dwave-neal)</span>
 pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;cpz-quant[viz]&quot;</span><span class="w">       </span><span class="c1"># + plotly figures</span>
-pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;cpz-quant[all]&quot;</span><span class="w">       </span><span class="c1"># everything</span>
+pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;cpz-quant[all]&quot;</span><span class="w">       </span><span class="c1"># common optional research dependencies</span>
+pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;cpz-quant[quantum-braket]&quot;</span><span class="w">  </span><span class="c1"># experimental local QAOA (1.1.0+)</span>
 </code></pre></div>
 <p>Python 3.9+ on any OS.</p>
 <h2 id="input-formats">Input formats<a class="headerlink" href="#input-formats" title="Permanent link">&para;</a></h2>
@@ -740,7 +741,7 @@ pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot
 
 <span class="n">cv</span> <span class="o">=</span> <span class="n">cross_validate</span><span class="p">(</span>
     <span class="k">lambda</span> <span class="n">train</span><span class="p">:</span> <span class="n">hierarchical_risk_parity</span><span class="p">(</span><span class="n">train</span><span class="p">)</span><span class="o">.</span><span class="n">weights</span><span class="p">,</span>
-    <span class="n">returns</span><span class="p">,</span>
+    <span class="n">returns</span><span class="o">.</span><span class="n">to_dict</span><span class="p">(</span><span class="n">as_series</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span>
     <span class="n">cv</span><span class="o">=</span><span class="n">WalkForward</span><span class="p">(</span><span class="n">n_splits</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span> <span class="n">test_size</span><span class="o">=</span><span class="mi">63</span><span class="p">),</span>
 <span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="n">cv</span><span class="o">.</span><span class="n">oos_sharpe</span><span class="p">,</span> <span class="n">cv</span><span class="o">.</span><span class="n">stability</span><span class="p">())</span>
