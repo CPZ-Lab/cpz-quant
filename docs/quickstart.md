@@ -9,7 +9,8 @@ pip install "cpz-quant[cvx]"       # + cvxpy convex backend
 pip install "cpz-quant[cvx-mip]"   # + SCIP for cardinality constraints
 pip install "cpz-quant[quantum]"   # + simulated annealing (dwave-neal)
 pip install "cpz-quant[viz]"       # + plotly figures
-pip install "cpz-quant[all]"       # everything
+pip install "cpz-quant[all]"       # common optional research dependencies
+pip install "cpz-quant[quantum-braket]"  # experimental local QAOA (1.1.0+)
 ```
 
 Python 3.9+ on any OS.
@@ -63,7 +64,7 @@ from cpz_quant.portfolio import WalkForward, cross_validate
 
 cv = cross_validate(
     lambda train: hierarchical_risk_parity(train).weights,
-    returns,
+    returns.to_dict(as_series=False),
     cv=WalkForward(n_splits=4, test_size=63),
 )
 print(cv.oos_sharpe, cv.stability())
