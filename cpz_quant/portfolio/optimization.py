@@ -54,12 +54,16 @@ class ARCResult:
 
 @dataclass
 class Constraints:
-    """Optimisation constraints — every limit is configurable."""
+    """Requested limits; supported fields depend on the chosen optimizer.
+
+    The core mean/min-variance and max-Sharpe functions enforce full investment,
+    weight bounds and gross exposure. They reject unsupported optional limits.
+    """
     long_only: bool = False
     max_weight: float = 1.0
     min_weight: float = -1.0
-    max_gross_exposure: float = 2.0
-    max_net_exposure: float = 1.0
+    max_gross_exposure: Optional[float] = 2.0
+    max_net_exposure: Optional[float] = 1.0
     sector_limits: Optional[Dict[str, float]] = None
     factor_limits: Optional[Dict[str, Tuple[float, float]]] = None
     max_turnover: Optional[float] = None
@@ -73,24 +77,76 @@ def _build_matrices(
     risk_free_rate: float = 0.0,
 ) -> Tuple[List[str], np.ndarray, np.ndarray]:
     ids = list(returns.keys())
-    min_len = min(len(returns[i]) for i in ids)
-    R = np.column_stack([np.array(returns[i][-min_len:], dtype=np.float64) for i in ids])
-    R = np.nan_to_num(R, nan=0.0, posinf=0.0, neginf=0.0)
+    if not ids:
+        raise ValueError("returns must contain at least one asset")
+    arrays = [np.asarray(returns[i], dtype=np.float64) for i in ids]
+    for aid, values in zip(ids, arrays):
+        if values.ndim != 1 or values.size < 2:
+            raise ValueError(f"returns for {aid!r} must be a 1D series with at least two observations")
+        if not np.all(np.isfinite(values)):
+            raise ValueError(f"returns for {aid!r} must contain only finite observations")
+    if not np.isfinite(risk_free_rate):
+        raise ValueError("risk_free_rate must be finite")
+    min_len = min(len(values) for values in arrays)
+    R = np.column_stack([values[-min_len:] for values in arrays])
     with np.errstate(all="ignore"):
         mu = np.mean(R, axis=0) * TRADING_DAYS
         cov = np.cov(R.T, ddof=1) * TRADING_DAYS
     if cov.ndim == 0:
         cov = np.array([[float(cov)]])
-    cov = np.nan_to_num(cov, nan=0.0, posinf=0.0, neginf=0.0)
-    mu = np.nan_to_num(mu, nan=0.0, posinf=0.0, neginf=0.0)
+    if not np.all(np.isfinite(cov)) or not np.all(np.isfinite(mu)):
+        raise ValueError("returns must produce finite means and covariance")
     return ids, mu, cov
 
 
 def _bounds(n: int, constraints: Optional[Constraints] = None):
     c = constraints or Constraints()
-    lo = 0.0 if c.long_only else c.min_weight
+    if not np.isfinite(c.min_weight) or not np.isfinite(c.max_weight):
+        raise ValueError("min_weight and max_weight must be finite")
+    lo = max(0.0, c.min_weight) if c.long_only else c.min_weight
     hi = c.max_weight
+    if lo > hi:
+        raise ValueError("effective min_weight must not exceed max_weight")
     return [(lo, hi)] * n
+
+
+def _core_constraints(c: Constraints, label: str):
+    """Build only limits these fully invested native optimizers can enforce."""
+    for name in ("sector_limits", "factor_limits", "max_turnover", "max_tracking_error"):
+        if getattr(c, name) is not None:
+            raise NotImplementedError(f"{label}: {name} is not supported by this optimizer")
+    for name in ("max_gross_exposure", "max_net_exposure"):
+        limit = getattr(c, name)
+        if limit is not None and (not np.isfinite(limit) or limit < 1.0):
+            raise ValueError(f"{label}: {name} must be finite and >= 1 for full investment")
+    cons = [{"type": "eq", "fun": lambda w: np.sum(w) - 1.0}]
+    if c.max_gross_exposure is not None:
+        cons.append({"type": "ineq", "fun": lambda w: c.max_gross_exposure - np.abs(w).sum()})
+    return cons
+
+
+def _core_result(result, bounds, c, label, mu, cov, rf, ids, target_return=None):
+    """Never normalize or substitute a failed or infeasible solver iterate."""
+    if not result.success:
+        raise RuntimeError(f"{label}: optimization failed: {result.message}")
+    w = np.asarray(result.x, dtype=float)
+    tolerance = 1e-7
+    if w.shape != (len(ids),) or not np.all(np.isfinite(w)):
+        raise RuntimeError(f"{label}: solver returned invalid weights")
+    if abs(float(w.sum()) - 1.0) > tolerance:
+        raise RuntimeError(f"{label}: solver weights do not sum to one")
+    lower, upper = np.asarray(bounds, dtype=float).T
+    if np.any(w < lower - tolerance) or np.any(w > upper + tolerance):
+        raise RuntimeError(f"{label}: solver weights violate the requested bounds")
+    if c.max_gross_exposure is not None and np.abs(w).sum() > c.max_gross_exposure + tolerance:
+        raise RuntimeError(f"{label}: solver weights violate max_gross_exposure")
+    if target_return is not None and abs(float(w @ mu) - target_return) > tolerance:
+        raise RuntimeError(f"{label}: solver weights do not achieve target_return")
+    r = _metrics(w, mu, cov, rf, ids)
+    # Rounding each position can break a tight bound or full investment.
+    r.weights = {aid: float(weight) for aid, weight in zip(ids, w)}
+    r.method = label
+    return r
 
 
 def _metrics(w: np.ndarray, mu: np.ndarray, cov: np.ndarray, rf: float, ids: List[str]) -> OptResult:
@@ -117,14 +173,19 @@ def mean_variance(
 ) -> OptResult:
     """Classic Markowitz mean-variance optimisation.
 
-    When *target_return* is given, finds the minimum-variance portfolio
-    achieving that return. Otherwise maximises Sharpe ratio.
+    Minimizes variance, optionally at an exact annualized decimal
+    *target_return*. Without a target this is global minimum variance;
+    use :func:`max_sharpe` for a tangency portfolio. Supports full investment,
+    weight bounds and gross exposure; unsupported optional limits raise.
     """
     ids, mu, cov = _build_matrices(returns, risk_free_rate)
     n = len(ids)
-    bounds = _bounds(n, constraints)
-    cons = [{"type": "eq", "fun": lambda w: np.sum(w) - 1.0}]
+    c = constraints or Constraints()
+    bounds = _bounds(n, c)
+    cons = _core_constraints(c, "mean_variance")
     if target_return is not None:
+        if not np.isfinite(target_return):
+            raise ValueError("target_return must be finite")
         cons.append({"type": "eq", "fun": lambda w: w @ mu - target_return})
 
     def objective(w):
@@ -133,10 +194,8 @@ def mean_variance(
     x0 = np.ones(n) / n
     result = sp_opt.minimize(objective, x0, method="SLSQP", bounds=bounds, constraints=cons,
                              options={"maxiter": 500, "ftol": 1e-12})
-    w = result.x / max(np.sum(result.x), EPSILON) if np.sum(result.x) > EPSILON else np.ones(n) / n
-    r = _metrics(w, mu, cov, risk_free_rate, ids)
-    r.method = "mean_variance"
-    return r
+    return _core_result(result, bounds, c, "mean_variance", mu, cov,
+                        risk_free_rate, ids, target_return)
 
 
 @frame_friendly
@@ -145,11 +204,15 @@ def min_variance(
     *,
     constraints: Optional[Constraints] = None,
 ) -> OptResult:
-    """Global minimum variance — no return estimates needed."""
+    """Global minimum variance with full investment, weight bounds and gross cap.
+
+    Unsupported optional constraints and failed/infeasible solver results raise.
+    """
     ids, mu, cov = _build_matrices(returns)
     n = len(ids)
-    bounds = _bounds(n, constraints)
-    cons = [{"type": "eq", "fun": lambda w: np.sum(w) - 1.0}]
+    c = constraints or Constraints()
+    bounds = _bounds(n, c)
+    cons = _core_constraints(c, "min_variance")
 
     def objective(w):
         return float(w @ cov @ w)
@@ -157,23 +220,7 @@ def min_variance(
     x0 = np.ones(n) / n
     result = sp_opt.minimize(objective, x0, method="SLSQP", bounds=bounds, constraints=cons,
                              options={"maxiter": 500, "ftol": 1e-12})
-    if not result.success:
-        raise RuntimeError(f"min_variance: optimization failed: {result.message}")
-    # Check the constraints on the returned iterate before presenting it as a
-    # portfolio. Renormalizing or substituting equal weights can violate the
-    # very bounds the caller asked the optimizer to enforce.
-    w = np.asarray(result.x, dtype=float)
-    tolerance = 1e-7
-    if w.shape != (n,) or not np.all(np.isfinite(w)):
-        raise RuntimeError("min_variance: solver returned invalid weights")
-    if abs(float(w.sum()) - 1.0) > tolerance:
-        raise RuntimeError("min_variance: solver weights do not sum to one")
-    lower, upper = np.asarray(bounds, dtype=float).T
-    if np.any(w < lower - tolerance) or np.any(w > upper + tolerance):
-        raise RuntimeError("min_variance: solver weights violate the requested bounds")
-    r = _metrics(w, mu, cov, 0.0, ids)
-    r.method = "min_variance"
-    return r
+    return _core_result(result, bounds, c, "min_variance", mu, cov, 0.0, ids)
 
 
 @frame_friendly
@@ -183,11 +230,15 @@ def max_sharpe(
     risk_free_rate: float = 0.0,
     constraints: Optional[Constraints] = None,
 ) -> OptResult:
-    """Maximum Sharpe ratio (tangency portfolio)."""
+    """Maximum Sharpe ratio with full investment, weight bounds and gross cap.
+
+    Unsupported optional constraints and failed/infeasible solver results raise.
+    """
     ids, mu, cov = _build_matrices(returns, risk_free_rate)
     n = len(ids)
-    bounds = _bounds(n, constraints)
-    cons = [{"type": "eq", "fun": lambda w: np.sum(w) - 1.0}]
+    c = constraints or Constraints()
+    bounds = _bounds(n, c)
+    cons = _core_constraints(c, "max_sharpe")
 
     def neg_sharpe(w):
         ret = w @ mu
@@ -197,10 +248,7 @@ def max_sharpe(
     x0 = np.ones(n) / n
     result = sp_opt.minimize(neg_sharpe, x0, method="SLSQP", bounds=bounds, constraints=cons,
                              options={"maxiter": 500, "ftol": 1e-12})
-    w = result.x
-    r = _metrics(w, mu, cov, risk_free_rate, ids)
-    r.method = "max_sharpe"
-    return r
+    return _core_result(result, bounds, c, "max_sharpe", mu, cov, risk_free_rate, ids)
 
 
 @frame_friendly

@@ -6,7 +6,7 @@ All allocators live in `cpz_quant.portfolio`, take `{asset_id: [returns]}`, and 
 
 | Function | Method |
 |---|---|
-| `mean_variance` | Markowitz mean-variance; max-Sharpe or min-variance at a target return |
+| `mean_variance` | Minimum variance, optionally at an exact target return |
 | `min_variance` | Global minimum variance |
 | `max_sharpe` | Maximum Sharpe ratio |
 | `risk_parity` | Equal risk contribution (risk budgeting) |
@@ -27,6 +27,26 @@ All allocators live in `cpz_quant.portfolio`, take `{asset_id: [returns]}`, and 
 | `quantum_inspired_hrp` | HRP with QUBO-based cluster ordering |
 
 The [convex backend](convex.md) adds `mean_variance_cvx`, `mean_cvar_cvx`, `robust_mean_variance_cvx`, and `cardinality_constrained_cvx`.
+
+### Core optimizer constraints
+
+`mean_variance`, `min_variance` and `max_sharpe` require full investment
+(`sum(weights) == 1`). They enforce `min_weight`, `max_weight`, `long_only`
+and `max_gross_exposure` (2.0 by default; `None` disables the gross cap).
+A positive `min_weight` still applies when `long_only=True`.
+Because net exposure is fixed at one, `max_net_exposure` below one is infeasible
+and raises. Sector, factor, turnover and tracking-error limits are not supported
+by these three functions and raise `NotImplementedError` when supplied.
+Other allocators have different constraint support; consult their APIs.
+
+These core optimizers raise on failed solvers or invalid returned weights.
+They retain solver precision in `weights` to avoid rounding away tight limits;
+constraint validation uses an absolute tolerance of `1e-7`.
+`mean_variance` minimizes variance even when no target is supplied; use
+`max_sharpe` to maximize the Sharpe ratio. Its optional `target_return` is an
+exact annualized decimal return, not a percentage or a lower bound.
+The shared mean/covariance preparation rejects non-finite returns and series
+with fewer than two observations instead of replacing them with zeros.
 
 ## Risk measures
 

@@ -114,8 +114,9 @@ def mean_variance_cvx(
     or minimises variance subject to ``mu @ w >= target_return`` when
     *target_return* (annualised, decimal) is given.
 
-    Unlike the scipy path, gross-exposure and turnover limits are hard
-    constraints of the program, not penalties.
+    Gross-exposure and turnover limits are hard constraints of the program,
+    not penalties. The native core optimizers support gross exposure but
+    reject turnover limits; this backend accepts explicit previous weights.
     """
     _require_cvxpy()
     ids, mu, cov = _build_matrices(returns, risk_free_rate)
