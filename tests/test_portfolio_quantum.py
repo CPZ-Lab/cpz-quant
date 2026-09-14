@@ -36,8 +36,8 @@ SMALL_RETURNS = {
 
 # ── QHRP Tests ───────────────────────────────────────────────────────
 
-class TestQuantumInspiredHRP:
 
+class TestQuantumInspiredHRP:
     def test_heuristic_basic(self):
         result = quantum_inspired_hrp(SAMPLE_RETURNS, backend="heuristic")
         assert result.method == "quantum_inspired_hrp"
@@ -78,8 +78,8 @@ class TestQuantumInspiredHRP:
     def test_nan_inf_returns_do_not_crash(self):
         """Regression: NaN/Inf in returns should not crash linkage."""
         dirty = {
-            "A": [0.01, float('nan'), 0.008, 0.002, -0.003] * 50,
-            "B": [-0.002, 0.004, float('inf'), 0.003, 0.005] * 50,
+            "A": [0.01, float("nan"), 0.008, 0.002, -0.003] * 50,
+            "B": [-0.002, 0.004, float("inf"), 0.003, 0.005] * 50,
             "C": [0.003, 0.001, -0.002, 0.004, 0.002] * 50,
         }
         result = quantum_inspired_hrp(dirty, backend="heuristic")
@@ -90,8 +90,8 @@ class TestQuantumInspiredHRP:
     def test_nan_inf_hrp_does_not_crash(self):
         """Regression: hierarchical_risk_parity must survive NaN/Inf returns."""
         dirty = {
-            "X": [0.01, float('nan'), 0.008, 0.002, -0.003] * 50,
-            "Y": [-0.002, 0.004, float('inf'), 0.003, 0.005] * 50,
+            "X": [0.01, float("nan"), 0.008, 0.002, -0.003] * 50,
+            "Y": [-0.002, 0.004, float("inf"), 0.003, 0.005] * 50,
             "Z": [0.003, 0.001, -0.002, 0.004, 0.002] * 50,
         }
         result = hierarchical_risk_parity(dirty)
@@ -113,11 +113,13 @@ class TestQuantumInspiredHRP:
 
 # ── QUBO Portfolio Selection Tests ───────────────────────────────────
 
-class TestQUBOPortfolioSelection:
 
+class TestQUBOPortfolioSelection:
     def test_basic(self):
         result = qubo_portfolio_selection(
-            SAMPLE_RETURNS, target_k=3, backend="brute_force",
+            SAMPLE_RETURNS,
+            target_k=3,
+            backend="brute_force",
         )
         assert isinstance(result, QUBOResult)
         assert result.method == "qubo_portfolio_selection"
@@ -127,20 +129,26 @@ class TestQUBOPortfolioSelection:
     def test_cardinality(self):
         for k in [1, 2, 4, 5]:
             result = qubo_portfolio_selection(
-                SAMPLE_RETURNS, target_k=k, backend="brute_force",
+                SAMPLE_RETURNS,
+                target_k=k,
+                backend="brute_force",
             )
             non_zero = sum(1 for w in result.weights.values() if w > 0)
             assert non_zero == k
 
     def test_target_k_exceeds_n(self):
         result = qubo_portfolio_selection(
-            SMALL_RETURNS, target_k=10, backend="brute_force",
+            SMALL_RETURNS,
+            target_k=10,
+            backend="brute_force",
         )
         assert len(result.selected_assets) <= 3
 
     def test_info_fields(self):
         result = qubo_portfolio_selection(
-            SAMPLE_RETURNS, target_k=2, backend="brute_force",
+            SAMPLE_RETURNS,
+            target_k=2,
+            backend="brute_force",
         )
         assert result.info["target_k"] == 2
         assert result.info["actual_k"] == 2
@@ -159,8 +167,8 @@ class TestQUBOPortfolioSelection:
 
 # ── QUBO Matrix Tests ────────────────────────────────────────────────
 
-class TestBuildQUBO:
 
+class TestBuildQUBO:
     def test_portfolio_qubo_shape(self):
         mu = np.array([0.10, 0.12, 0.07, 0.09, 0.11])
         cov = np.eye(5) * 0.04
@@ -178,8 +186,8 @@ class TestBuildQUBO:
 
 # ── Solver Protocol Tests ────────────────────────────────────────────
 
-class TestSolverProtocol:
 
+class TestSolverProtocol:
     def test_brute_force_solver(self):
         Q = np.array([[-1, 2], [2, -1]], dtype=np.float64)
         solver = ClassicalBruteForceSolver()
@@ -190,7 +198,7 @@ class TestSolverProtocol:
     def test_brute_force_too_large(self):
         Q = np.zeros((25, 25))
         solver = ClassicalBruteForceSolver()
-        with pytest.raises(ValueError, match="infeasible"):
+        with pytest.raises(ValueError, match="1..20 variables"):
             solver.solve(Q)
 
     def test_get_solver_factory(self):
@@ -204,8 +212,8 @@ class TestSolverProtocol:
 
 # ── Simulated Annealing Tests (skip if not installed) ────────────────
 
-class TestSimulatedAnnealing:
 
+class TestSimulatedAnnealing:
     @pytest.fixture(autouse=True)
     def _check_dwave(self):
         try:
@@ -216,14 +224,17 @@ class TestSimulatedAnnealing:
 
     def test_sa_qubo_selection(self):
         result = qubo_portfolio_selection(
-            SAMPLE_RETURNS, target_k=3, backend="simulated_annealing",
+            SAMPLE_RETURNS,
+            target_k=3,
+            backend="simulated_annealing",
         )
         assert result.method == "qubo_portfolio_selection"
         assert len(result.selected_assets) > 0
 
     def test_sa_qhrp(self):
         result = quantum_inspired_hrp(
-            SMALL_RETURNS, backend="simulated_annealing",
+            SMALL_RETURNS,
+            backend="simulated_annealing",
         )
         assert result.method == "quantum_inspired_hrp"
         assert abs(sum(result.weights.values()) - 1.0) < 1e-6
@@ -231,32 +242,44 @@ class TestSimulatedAnnealing:
 
 # ── Braket Solver Tests (mocked) ─────────────────────────────────────
 
-class TestBraketSolverMocked:
 
-    def test_braket_requires_s3_folder(self):
+class TestBraketSolverMocked:
+    def test_braket_local_requires_no_s3_folder(self):
         from cpz_quant.portfolio.quantum_backends import BraketSolver
-        with pytest.raises(ValueError, match="s3_folder is required"):
-            BraketSolver(s3_folder=None)
+
+        assert BraketSolver(s3_folder=None).device_kind == "local"
 
     def test_braket_device_aliases(self):
         from cpz_quant.portfolio.quantum_backends import BraketSolver
-        solver = BraketSolver(
-            device_arn="ionq",
-            s3_folder=("test-bucket", "test-prefix"),
-        )
-        assert "ionq" in solver.device_arn.lower()
 
-        solver2 = BraketSolver(
-            device_arn="rigetti",
-            s3_folder=("test-bucket", "test-prefix"),
-        )
-        assert "rigetti" in solver2.device_arn.lower()
+        for device in ("ionq", "rigetti", "sv1", "dm1", "quera"):
+            with pytest.raises(NotImplementedError, match="disabled"):
+                BraketSolver(device_arn=device, s3_folder=("test-bucket", "test-prefix"))
 
     def test_braket_cost_estimation(self):
         from cpz_quant.portfolio.quantum_backends import BraketSolver
-        solver = BraketSolver(
-            device_arn="ionq",
-            s3_folder=("test-bucket", "test-prefix"),
-            shots=1000,
+
+        assert BraketSolver(device="local").estimated_cost == 0
+
+    def test_actual_local_qaoa_and_energy_convention(self):
+        pytest.importorskip("braket")
+        from cpz_quant.portfolio.quantum_backends import BraketSolver, _bqm_from_qubo
+
+        q = np.array([[-1.0, 0.3], [0.3, -0.7]])
+        bqm = _bqm_from_qubo(q)
+        for x in (np.array([a, b]) for a in (0, 1) for b in (0, 1)):
+            assert bqm.energy(dict(enumerate(x))) == pytest.approx(x @ q @ x)
+        a = BraketSolver(seed=7, shots=100, max_iter=8)
+        b = BraketSolver(seed=7, shots=100, max_iter=8)
+        x = a.solve(q)
+        assert np.array_equal(x, b.solve(q))
+        assert x @ q @ x == pytest.approx(
+            min(np.array([i, j]) @ q @ np.array([i, j]) for i in (0, 1) for j in (0, 1))
         )
-        assert solver.estimated_cost > 0
+        assert a.last_meta.cost_source == "free"
+        assert a.last_meta.n_tasks <= 8
+
+    def test_invalid_matrix_is_rejected(self):
+        for q in (np.empty((0, 0)), np.array([[float("nan")]]), np.ones((2, 3))):
+            with pytest.raises(ValueError):
+                ClassicalBruteForceSolver().solve(q)
