@@ -157,17 +157,20 @@ def min_variance(
     x0 = np.ones(n) / n
     result = sp_opt.minimize(objective, x0, method="SLSQP", bounds=bounds, constraints=cons,
                              options={"maxiter": 500, "ftol": 1e-12})
-    # Do not abs() — that silently flips shorts to longs without re-solving.
-    # If long_only=False, negative weights are valid; if long_only=True, bounds already enforce >=0.
-    # Fall back to equal-weight only on optimizer failure / zero-sum.
-    if not result.success or np.sum(result.x) < EPSILON:
-        w = np.ones(n) / n
-    else:
-        w = result.x / max(np.sum(result.x), EPSILON)
-        # For long_only, clip tiny negatives from solver tolerance (default is False, not True)
-        if constraints is not None and getattr(constraints, 'long_only', False):
-            w = np.maximum(w, 0)
-            w /= max(np.sum(w), EPSILON)
+    if not result.success:
+        raise RuntimeError(f"min_variance: optimization failed: {result.message}")
+    # Check the constraints on the returned iterate before presenting it as a
+    # portfolio. Renormalizing or substituting equal weights can violate the
+    # very bounds the caller asked the optimizer to enforce.
+    w = np.asarray(result.x, dtype=float)
+    tolerance = 1e-7
+    if w.shape != (n,) or not np.all(np.isfinite(w)):
+        raise RuntimeError("min_variance: solver returned invalid weights")
+    if abs(float(w.sum()) - 1.0) > tolerance:
+        raise RuntimeError("min_variance: solver weights do not sum to one")
+    lower, upper = np.asarray(bounds, dtype=float).T
+    if np.any(w < lower - tolerance) or np.any(w > upper + tolerance):
+        raise RuntimeError("min_variance: solver weights violate the requested bounds")
     r = _metrics(w, mu, cov, 0.0, ids)
     r.method = "min_variance"
     return r

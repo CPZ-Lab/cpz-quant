@@ -4,6 +4,9 @@ All notable changes to cpz-quant are documented here. The format follows [Keep a
 
 ## [1.1.0] - 2026-09-14
 
+- Minimum-variance optimization now raises when the solver fails or returns
+  non-finite, unnormalized, or out-of-bounds weights. Infeasible constraints
+  no longer silently produce an equal-weight portfolio.
 - Replace misleading Braket-to-classical fallbacks with genuine, seeded local
   gate-model QAOA simulation. Install the new quantum-braket extra.
 - Paid AWS simulators and physical QPUs now raise NotImplementedError until
