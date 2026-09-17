@@ -87,6 +87,8 @@ dev = [
   "cvxpy>=1.4",
   "plotly>=5.18",
   "mkdocs-material>=9",
+  # Test-only reference implementation for the indicator suite.
+  "TA-Lib==0.8.0",
 ]
 
 [project.urls]

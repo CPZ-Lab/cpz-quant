@@ -2,6 +2,29 @@
 
 All notable changes to cpz-quant are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+- Expand `cpz_quant.indicators` from 32 to 91 indicator functions and add all
+  61 TA-Lib candlestick patterns. New trend: TRIMA, T3, ZLEMA, HMA, ALMA,
+  VIDYA, McGinley Dynamic, Parabolic SAR, Ichimoku, Aroon, Aroon Oscillator,
+  Vortex, TRIX, Mass Index, Midpoint, Midprice, Schaff Trend Cycle. New
+  momentum: slow Stochastic, Stochastic RSI, CMO, MOM, ROCP, ROCR, Ultimate
+  Oscillator, Awesome Oscillator, APO, PPO, KST, TSI, Connors RSI, Fisher
+  Transform, Coppock, DPO, Relative Vigor Index, Elder Ray, WaveTrend, Balance
+  of Power, DMI (+DI, -DI, DX, ADX, ADXR). New volatility: Parkinson,
+  Rogers-Satchell, Yang-Zhang, Chaikin Volatility, Ulcer Index, Choppiness
+  Index. New volume: VWMA, A/D Line, Chaikin A/D Oscillator, Force Index, Ease
+  of Movement, Klinger, NVI, PVI, Price Volume Trend, Percentage Volume
+  Oscillator. New statistics: regression end value and angle, Kaufman
+  efficiency ratio, rolling Sharpe and Sortino.
+- `vwap()` accepts `session_col` to anchor the VWAP per trading date or any
+  session label. Without it the result is unchanged.
+- Indicator correctness suite: live comparisons against TA-Lib 0.8.0 (new
+  test-only dev dependency), frozen pandas-ta references, independent formula
+  transcriptions and known-answer properties. Existing EMA, DEMA, TEMA, MACD,
+  ATR and ADX seed their smoothing from the first bar; their behaviour is
+  unchanged and the suite asserts they converge to TA-Lib.
+
 ## [1.1.0] - 2026-09-14
 
 - Core mean/min-variance and max-Sharpe optimizers enforce positive long-only

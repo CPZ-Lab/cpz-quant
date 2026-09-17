@@ -1,4 +1,5 @@
-"""Volatility indicators: ATR, Bollinger, Keltner, Donchian, realized vol, Garman-Klass, NATR.
+"""Volatility indicators: ATR, Bollinger, Keltner, Donchian, realized vol, Garman-Klass, NATR,
+Chaikin Volatility, Ulcer Index, Choppiness Index, Parkinson, Rogers-Satchell, Yang-Zhang.
 
 All functions operate on raw numpy arrays and return numpy arrays.
 """
@@ -9,7 +10,16 @@ from typing import Tuple
 
 import numpy as np
 
-from ._helpers import EPSILON, TRADING_DAYS_PER_YEAR, wilder_smooth
+from ._helpers import (
+    EPSILON,
+    TRADING_DAYS_PER_YEAR,
+    _rolling_view,
+    ema_sma_seed,
+    rolling_apply,
+    safe_divide,
+    shift,
+    wilder_smooth,
+)
 from .trend import ema_series, sma_series
 
 # ── ATR ──────────────────────────────────────────────────────────────
@@ -234,3 +244,142 @@ def natr_series(
     atr_vals = atr_series(high, low, close, period, smoothing=smoothing)
     with np.errstate(divide="ignore", invalid="ignore"):
         return np.where(np.abs(close) > EPSILON, atr_vals / close * 100.0, np.nan)
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  Extended volatility family
+# ═══════════════════════════════════════════════════════════════════
+
+
+def _annualize(values: np.ndarray, annualize: bool, trading_days: int) -> np.ndarray:
+    return values * np.sqrt(trading_days) if annualize else values
+
+
+# ── Chaikin Volatility ───────────────────────────────────────────────
+
+def chaikin_volatility_series(
+    high: np.ndarray,
+    low: np.ndarray,
+    period: int = 10,
+    roc_period: int = 10,
+) -> np.ndarray:
+    """Chaikin Volatility: percent change over *roc_period* of ``EMA(high - low, period)``.
+
+    The EMA is SMA-seeded.
+    """
+    e = ema_sma_seed(high - low, period)
+    prev = shift(e, roc_period)
+    return safe_divide(e - prev, prev) * 100.0
+
+
+# ── Ulcer Index ──────────────────────────────────────────────────────
+
+def ulcer_index_series(close: np.ndarray, period: int = 14) -> np.ndarray:
+    """Peter Martin's Ulcer Index (StockCharts definition).
+
+    ``pct_dd = 100 * (close - max(close, period)) / max(close, period)`` and
+    ``UI = sqrt(mean(pct_dd^2, period))``. First value at ``2 * period - 2``.
+    """
+    peak = rolling_apply(close, period, "max")
+    pct_dd = safe_divide(close - peak, peak) * 100.0
+    return np.sqrt(rolling_apply(pct_dd**2, period, "mean"))
+
+
+# ── Choppiness Index ─────────────────────────────────────────────────
+
+def choppiness_series(
+    high: np.ndarray,
+    low: np.ndarray,
+    close: np.ndarray,
+    period: int = 14,
+) -> np.ndarray:
+    """Dreiss' Choppiness Index (0..100).
+
+    ``100 * log10(sum(TR, period) / (max(high, period) - min(low, period))) / log10(period)``
+    where TR needs a previous close, so the first value is at index *period*
+    (TA-Lib ``TRANGE`` and pandas-ta convention).
+    """
+    tr = true_range(high, low, close)
+    tr[:1] = np.nan
+    ratio = safe_divide(
+        rolling_apply(tr, period, "sum"),
+        rolling_apply(high, period, "max") - rolling_apply(low, period, "min"),
+    )
+    with np.errstate(divide="ignore", invalid="ignore"):
+        return 100.0 * np.log10(ratio) / np.log10(period)
+
+
+# ── Range-based volatility estimators ────────────────────────────────
+
+def parkinson_series(
+    high: np.ndarray,
+    low: np.ndarray,
+    period: int = 20,
+    *,
+    annualize: bool = True,
+    trading_days: int = TRADING_DAYS_PER_YEAR,
+) -> np.ndarray:
+    """Parkinson (1980) high-low volatility.
+
+    ``sigma^2 = mean(ln(high / low)^2) / (4 ln 2)`` over *period* bars.
+    """
+    hl = np.log(high / low)
+    var = rolling_apply(hl**2, period, "mean") / (4.0 * np.log(2.0))
+    return _annualize(np.sqrt(var), annualize, trading_days)
+
+
+def rogers_satchell_series(
+    open_: np.ndarray,
+    high: np.ndarray,
+    low: np.ndarray,
+    close: np.ndarray,
+    period: int = 20,
+    *,
+    annualize: bool = True,
+    trading_days: int = TRADING_DAYS_PER_YEAR,
+) -> np.ndarray:
+    """Rogers-Satchell (1991) drift-independent volatility.
+
+    ``sigma^2 = mean(ln(H/C) ln(H/O) + ln(L/C) ln(L/O))`` over *period* bars.
+    """
+    rs = np.log(high / close) * np.log(high / open_) + np.log(low / close) * np.log(low / open_)
+    var = rolling_apply(rs, period, "mean")
+    return _annualize(np.sqrt(np.maximum(var, 0.0)), annualize, trading_days)
+
+
+def yang_zhang_series(
+    open_: np.ndarray,
+    high: np.ndarray,
+    low: np.ndarray,
+    close: np.ndarray,
+    period: int = 20,
+    *,
+    annualize: bool = True,
+    trading_days: int = TRADING_DAYS_PER_YEAR,
+) -> np.ndarray:
+    """Yang-Zhang (2000) volatility.
+
+    ``sigma^2 = var(overnight) + k * var(open_to_close) + (1 - k) * RS`` with
+    ``overnight = ln(O_t / C_{t-1})``, ``open_to_close = ln(C_t / O_t)``,
+    sample variances (ddof=1) and the Rogers-Satchell mean ``RS`` over
+    *period* bars, and ``k = 0.34 / (1.34 + (period + 1) / (period - 1))``.
+    The first value needs a previous close, so it appears at index *period*.
+    """
+    if period < 2:
+        raise ValueError("yang_zhang period must be >= 2")
+    n = len(close)
+    out = np.full(n, np.nan)
+    if n <= period:
+        return out
+    overnight = np.log(open_[1:] / close[:-1])
+    oc = np.log(close[1:] / open_[1:])
+    rs = (
+        np.log(high[1:] / close[1:]) * np.log(high[1:] / open_[1:])
+        + np.log(low[1:] / close[1:]) * np.log(low[1:] / open_[1:])
+    )
+    var_o = _rolling_view(overnight, period).var(axis=1, ddof=1)
+    var_c = _rolling_view(oc, period).var(axis=1, ddof=1)
+    var_rs = _rolling_view(rs, period).mean(axis=1)
+    k = 0.34 / (1.34 + (period + 1.0) / (period - 1.0))
+    out[period:] = np.sqrt(np.maximum(var_o + k * var_c + (1.0 - k) * var_rs, 0.0))
+    return _annualize(out, annualize, trading_days)
