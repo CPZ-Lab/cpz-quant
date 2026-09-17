@@ -4,6 +4,8 @@ All notable changes to cpz-quant are documented here. The format follows [Keep a
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-09-17
+
 - Expand `cpz_quant.indicators` from 32 to 91 indicator functions and add all
   61 TA-Lib candlestick patterns. New trend: TRIMA, T3, ZLEMA, HMA, ALMA,
   VIDYA, McGinley Dynamic, Parabolic SAR, Ichimoku, Aroon, Aroon Oscillator,

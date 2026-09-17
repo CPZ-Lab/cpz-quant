@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cpz-quant"
-version = "1.1.0"
+version = "1.2.0"
 description = "Quantitative portfolio optimization, risk analytics, and anti-overfitting strategy certification in Python: mean-variance, HRP, HERC, NCO, Black-Litterman, entropy pooling, CVaR, robust and cardinality-constrained convex optimization, covariance shrinkage and denoising, walk-forward and combinatorial purged cross-validation, Probability of Backtest Overfitting, Deflated Sharpe Ratio, and vectorised technical indicators."
 readme = "README.md"
 license = { file = "LICENSE" }

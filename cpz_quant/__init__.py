@@ -22,6 +22,6 @@ standalone and Apache-2.0 licensed.
 from cpz_quant import certification, indicators, portfolio
 from cpz_quant.frames import as_returns
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 __all__ = ["portfolio", "certification", "indicators", "as_returns", "__version__"]
