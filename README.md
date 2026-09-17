@@ -121,7 +121,16 @@ Most backtests are overfit. cpz-quant ships the math to prove whether yours is:
 
 ### Technical indicators
 
-Vectorised momentum, trend, volatility, volume, and statistical indicators on NumPy/Polars, with optional Rust acceleration and graceful pure-Python fallback.
+91 vectorised indicator functions on NumPy/Polars plus all 61 TA-Lib candlestick patterns, with optional Rust acceleration for a few hot paths and pure-Python fallback.
+
+- **Trend (24):** SMA, EMA, WMA, DEMA, TEMA, TRIMA, T3, KAMA, ZLEMA, HMA, ALMA, VIDYA, McGinley Dynamic, Supertrend, Parabolic SAR, Ichimoku, Aroon, Aroon Oscillator, Vortex, TRIX, Mass Index, Midpoint, Midprice, Schaff Trend Cycle
+- **Momentum (30):** RSI, MACD, Stochastic (fast and slow), Stochastic RSI, Williams %R, CCI, ROC, ROCP, ROCR, MOM, momentum %, ADX, DMI (+DI, -DI, DX, ADX, ADXR), MFI, CMO, Ultimate Oscillator, Awesome Oscillator, APO, PPO, KST, TSI, Connors RSI, Fisher Transform, Coppock Curve, DPO, Relative Vigor Index, Elder Ray, WaveTrend, Balance of Power
+- **Volatility (13):** ATR, NATR, Bollinger Bands, Keltner, Donchian, close-to-close, Garman-Klass, Parkinson, Rogers-Satchell, Yang-Zhang, Chaikin Volatility, Ulcer Index, Choppiness Index
+- **Volume (14):** VWAP (cumulative or session-anchored), VWMA, OBV, Chaikin Money Flow, A/D Line, Chaikin A/D Oscillator, Force Index, Ease of Movement, Klinger, NVI, PVI, Price Volume Trend, Percentage Volume Oscillator, volume z-score
+- **Statistical (10):** rolling z-score, correlation, beta, Sharpe, Sortino, Hurst exponent, Kaufman efficiency ratio, linear regression (slope, intercept, R^2, forecast), regression end value, regression angle
+- **Candlestick patterns (61):** every TA-Lib `CDL*` function via `candle_pattern(bars, "engulfing")` or `candle_patterns(bars)`
+
+Correctness is tested numerically, not just smoke-tested: TA-Lib-equivalent indicators and every candlestick pattern are compared against TA-Lib on a seeded synthetic series (identical warm-up, 1e-9 tolerance, exact equality for patterns), others against frozen pandas-ta outputs or independent transcriptions of the published formula. Where published definitions disagree (EMA seeding, Ichimoku displacement, DPO centring) the docstring states the choice. See the [indicator docs](https://cpz-lab.github.io/cpz-quant/indicators/).
 
 ### Quantum and quantum-inspired optimization
 
