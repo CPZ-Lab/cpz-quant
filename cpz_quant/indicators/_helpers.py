@@ -180,3 +180,121 @@ def source_price(
         c = _col_to_numpy(bars, col_close)
         return (o + h + low + c) / 4.0
     raise ValueError(f"Unknown source '{source}'. Use: close, open, hl2, hlc3, ohlc4")
+
+
+# ── NaN-aware building blocks for chained indicators ────────────────
+#
+# Many indicators feed the output of one smoother into another. The
+# helpers below skip the leading NaN warm-up of their input so chains
+# line up exactly with reference implementations such as TA-Lib.
+
+
+def first_valid_index(values: np.ndarray) -> int:
+    """Index of the first non-NaN element (``len(values)`` if none)."""
+    idx = np.flatnonzero(~np.isnan(values))
+    return int(idx[0]) if idx.size else len(values)
+
+
+def ema_sma_seed(
+    values: np.ndarray,
+    period: int,
+    *,
+    alpha: Optional[float] = None,
+) -> np.ndarray:
+    """EMA seeded with the SMA of the first *period* valid values.
+
+    This is the TA-Lib (and TradingView ``ta.ema``) convention: the output
+    is NaN until ``first_valid + period - 1``, where it equals the simple
+    mean of the first *period* valid inputs, and follows
+    ``y[t] = alpha * x[t] + (1 - alpha) * y[t-1]`` afterwards. Leading NaNs
+    in *values* are skipped, so the helper can be chained.
+
+    Args:
+        values: Input array (leading NaNs allowed, no interior NaNs).
+        period: Look-back used for the seed and the default alpha.
+        alpha: Smoothing factor; defaults to ``2 / (period + 1)``.
+    """
+    n = len(values)
+    out = np.full(n, np.nan)
+    if period < 1:
+        raise ValueError("period must be >= 1")
+    start = first_valid_index(values)
+    seed_idx = start + period - 1
+    if seed_idx >= n:
+        return out
+    a = 2.0 / (period + 1) if alpha is None else float(alpha)
+    prev = float(np.mean(values[start : seed_idx + 1]))
+    out[seed_idx] = prev
+    one_minus = 1.0 - a
+    for i in range(seed_idx + 1, n):
+        prev = a * values[i] + one_minus * prev
+        out[i] = prev
+    return out
+
+
+def wilder_sma_seed(values: np.ndarray, period: int) -> np.ndarray:
+    """Wilder smoothing (alpha = 1/period) with an SMA seed, NaN-aware."""
+    return ema_sma_seed(values, period, alpha=1.0 / period)
+
+
+def _rolling_view(values: np.ndarray, period: int) -> np.ndarray:
+    from numpy.lib.stride_tricks import sliding_window_view
+
+    return sliding_window_view(values, period)
+
+
+def rolling_apply(values: np.ndarray, period: int, reducer: str) -> np.ndarray:
+    """Rolling ``sum`` / ``mean`` / ``max`` / ``min`` over a trailing window.
+
+    The output at index ``t`` covers ``values[t - period + 1 : t + 1]`` and
+    is NaN for ``t < period - 1``. NaNs inside a window propagate.
+    """
+    n = len(values)
+    out = np.full(n, np.nan)
+    if period < 1:
+        raise ValueError("period must be >= 1")
+    if n < period:
+        return out
+    win = _rolling_view(values, period)
+    if reducer == "sum":
+        out[period - 1 :] = win.sum(axis=1)
+    elif reducer == "mean":
+        out[period - 1 :] = win.mean(axis=1)
+    elif reducer == "max":
+        out[period - 1 :] = win.max(axis=1)
+    elif reducer == "min":
+        out[period - 1 :] = win.min(axis=1)
+    else:
+        raise ValueError(f"Unknown reducer '{reducer}'. Use: sum, mean, max, min")
+    return out
+
+
+def shift(values: np.ndarray, periods: int) -> np.ndarray:
+    """Shift an array by *periods* (positive = lag), padding with NaN."""
+    n = len(values)
+    out = np.full(n, np.nan)
+    if periods == 0:
+        return values.astype(np.float64, copy=True)
+    if abs(periods) >= n:
+        return out
+    if periods > 0:
+        out[periods:] = values[:-periods]
+    else:
+        out[:periods] = values[-periods:]
+    return out
+
+
+def safe_divide(num: np.ndarray, den: np.ndarray, fill: float = np.nan) -> np.ndarray:
+    """Element-wise ``num / den`` with *fill* where ``|den| <= EPSILON``.
+
+    NaN in either operand always yields NaN (warm-up is never filled).
+    """
+    num = np.asarray(num, dtype=np.float64)
+    den = np.asarray(den, dtype=np.float64)
+    shape = np.broadcast(num, den).shape
+    out = np.full(shape, fill, dtype=np.float64)
+    with np.errstate(invalid="ignore"):
+        ok = np.abs(den) > EPSILON
+    np.divide(num, den, out=out, where=ok)
+    out[np.broadcast_to(np.isnan(num), shape) | np.broadcast_to(np.isnan(den), shape)] = np.nan
+    return out

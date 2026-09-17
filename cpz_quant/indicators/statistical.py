@@ -1,4 +1,6 @@
-"""Statistical indicators: z-score, rolling correlation, rolling beta, Hurst exponent, linear regression.
+"""Statistical indicators: z-score, rolling correlation, rolling beta, Hurst exponent,
+linear regression (slope, intercept, R^2, forecast, end value, angle), Kaufman efficiency
+ratio, rolling Sharpe and Sortino.
 
 All functions operate on raw numpy arrays and return numpy arrays.
 """
@@ -9,7 +11,13 @@ from typing import Tuple
 
 import numpy as np
 
-from ._helpers import EPSILON
+from ._helpers import (
+    EPSILON,
+    TRADING_DAYS_PER_YEAR,
+    _rolling_view,
+    rolling_apply,
+    safe_divide,
+)
 
 # ── Z-Score ──────────────────────────────────────────────────────────
 
@@ -193,3 +201,96 @@ def linear_reg_series(
         forecast[i] = a + b * period
 
     return slope, r_sq, intercept, forecast
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  Extended statistical family
+# ═══════════════════════════════════════════════════════════════════
+
+
+# ── Linear regression value / angle ──────────────────────────────────
+
+def linear_reg_value_series(close: np.ndarray, period: int = 14) -> np.ndarray:
+    """End-point of the rolling least-squares line (TA-Lib ``LINEARREG``)."""
+    slope, _, intercept, _ = linear_reg_series(close, period)
+    return intercept + slope * (period - 1)
+
+
+def linear_reg_angle_series(close: np.ndarray, period: int = 14) -> np.ndarray:
+    """Angle of the rolling regression slope in degrees (TA-Lib ``LINEARREG_ANGLE``).
+
+    ``atan(slope) * 180 / pi`` with the slope in price units per bar, so the
+    value depends on the price scale.
+    """
+    slope = linear_reg_series(close, period)[0]
+    return np.degrees(np.arctan(slope))
+
+
+# ── Kaufman Efficiency Ratio ─────────────────────────────────────────
+
+def efficiency_ratio_series(close: np.ndarray, period: int = 10) -> np.ndarray:
+    """Kaufman Efficiency Ratio (0..1).
+
+    ``|close - close[t - period]| / sum(|close[i] - close[i-1]|)`` over the
+    last *period* changes; a zero path length gives NaN.
+    """
+    n = len(close)
+    out = np.full(n, np.nan)
+    if n <= period:
+        return out
+    direction = np.abs(close[period:] - close[:-period])
+    path = rolling_apply(np.abs(np.diff(close)), period, "sum")[period - 1 :]
+    out[period:] = safe_divide(direction, path)
+    return out
+
+
+# ── Rolling Sharpe / Sortino ─────────────────────────────────────────
+
+def rolling_sharpe_series(
+    returns: np.ndarray,
+    period: int = 63,
+    *,
+    risk_free: float = 0.0,
+    annualize: bool = True,
+    trading_days: int = TRADING_DAYS_PER_YEAR,
+) -> np.ndarray:
+    """Rolling Sharpe ratio of periodic returns.
+
+    ``mean(r - rf) / std(r - rf, ddof=1)`` over *period* returns, times
+    ``sqrt(trading_days)`` when annualised. *risk_free* is a per-period
+    rate. A zero standard deviation gives NaN.
+    """
+    excess = returns - risk_free
+    n = len(excess)
+    out = np.full(n, np.nan)
+    if period < 2 or n < period:
+        return out
+    win = _rolling_view(excess, period)
+    out[period - 1 :] = safe_divide(win.mean(axis=1), win.std(axis=1, ddof=1))
+    return out * np.sqrt(trading_days) if annualize else out
+
+
+def rolling_sortino_series(
+    returns: np.ndarray,
+    period: int = 63,
+    *,
+    target: float = 0.0,
+    annualize: bool = True,
+    trading_days: int = TRADING_DAYS_PER_YEAR,
+) -> np.ndarray:
+    """Rolling Sortino ratio of periodic returns.
+
+    ``mean(r - target) / DD`` with the target downside deviation
+    ``DD = sqrt(mean(min(r - target, 0)^2))`` over all *period* returns
+    (Sortino and Price, 1994), times ``sqrt(trading_days)`` when annualised.
+    *target* is a per-period rate. No downside observations gives NaN.
+    """
+    excess = returns - target
+    n = len(excess)
+    out = np.full(n, np.nan)
+    if period < 1 or n < period:
+        return out
+    win = _rolling_view(excess, period)
+    downside = np.sqrt(np.mean(np.minimum(win, 0.0) ** 2, axis=1))
+    out[period - 1 :] = safe_divide(win.mean(axis=1), downside)
+    return out * np.sqrt(trading_days) if annualize else out
