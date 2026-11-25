@@ -769,27 +769,26 @@ def _analytic_min_variance(cov: np.ndarray) -> np.ndarray:
     return w / s
 
 
-def _analytic_max_sharpe(cov: np.ndarray, mu: np.ndarray) -> np.ndarray:
-    """Fully invested tangency weights ``Sigma^-1 mu / 1'Sigma^-1 mu``.
+def _tangency_weights(cov: np.ndarray, mu: np.ndarray, where: str) -> np.ndarray:
+    """``Sigma^-1 mu`` scaled to sum to one, whatever the sign of ``1'Sigma^-1 mu``.
 
-    The tangency portfolio exists only when ``1'Sigma^-1 mu > 0``, i.e. the
-    minimum-variance portfolio earns more than the (zero) risk-free rate.
-    Otherwise normalising by the negative sum flips the direction and returns
-    the lowest-Sharpe portfolio on the frontier, so this raises instead.
+    Inside NCO a cluster whose sum is negative gets the flipped direction, but
+    that is not final: the cluster-level step can weight the cluster
+    negatively and flip it back. Whether a fully invested maximum-Sharpe
+    portfolio exists is decided by the cluster-level problem, see
+    :func:`nested_clustered_optimization`. Raises only when the sum is zero
+    and no scaling to full investment exists.
     """
     n = cov.shape[0]
     if n == 1:
         return np.ones(1)  # the only fully invested portfolio
     inv = np.linalg.pinv(cov + np.eye(n) * EPSILON)
     w = inv @ mu
-    s = w.sum()
-    if not s > 0:
+    s = float(w.sum())
+    if not abs(s) > 1e-12 * float(np.abs(w).sum()):
         raise ValueError(
-            "max_sharpe: no fully invested maximum-Sharpe portfolio exists because "
-            "the minimum-variance portfolio's expected return is not above the "
-            "risk-free rate (1'Sigma^-1 mu <= 0, as in a falling market); "
-            "normalising would return the lowest-Sharpe mix. Use objective="
-            "'min_variance' or long-only max_sharpe."
+            f"{where} has 1'Sigma^-1 mu = 0, so its maximum-Sharpe weights cannot be "
+            "scaled to full investment"
         )
     return w / s
 
@@ -837,11 +836,15 @@ def nested_clustered_optimization(
         n_clusters: force a cluster count; ``None`` auto-selects.
 
     Raises:
-        ValueError: for ``"max_sharpe"`` when a cluster, or the cluster-level
-            problem, has no fully invested tangency portfolio (its
-            minimum-variance mix has a non-positive expected return, as in a
-            falling market). Normalising there would pick the lowest-Sharpe
-            mix, so no weights are returned.
+        ValueError: for ``"max_sharpe"`` when the cluster-level problem has no
+            fully invested tangency portfolio: ``1'C^-1 m <= 0`` for the
+            cluster portfolios' covariance ``C`` and means ``m`` (their
+            minimum-variance mix does not earn more than the zero risk-free
+            rate, as in a falling market). Normalising there would return the
+            lowest-Sharpe mix, so no weights are returned. A single cluster
+            whose own ``1'Sigma^-1 mu`` is negative is fine: the cluster-level
+            step weights it negatively, which flips it back to its best
+            direction.
     """
     if objective not in ("min_variance", "max_sharpe"):
         raise ValueError(f"objective must be 'min_variance' or 'max_sharpe', got {objective!r}")
@@ -855,15 +858,18 @@ def nested_clustered_optimization(
     labels, uniq = _cluster_labels(cov, linkage_method, n_clusters)
     cluster_assets = {c: list(np.where(labels == c)[0]) for c in uniq}
 
-    def _sub(cov_s, mu_s):
-        return _analytic_min_variance(cov_s) if objective == "min_variance" \
-            else _analytic_max_sharpe(cov_s, mu_s)
+    label = "nested_clustered_optimization(objective='max_sharpe')"
+    names = {c: [ids[i] for i in cluster_assets[c]] for c in uniq}
 
     # Within-cluster weights.
     intra = np.zeros(n)
     for c in uniq:
         idx = cluster_assets[c]
-        intra[idx] = _sub(cov[np.ix_(idx, idx)], mu[idx])
+        sub_cov, sub_mu = cov[np.ix_(idx, idx)], mu[idx]
+        if objective == "min_variance":
+            intra[idx] = _analytic_min_variance(sub_cov)
+        else:
+            intra[idx] = _tangency_weights(sub_cov, sub_mu, f"{label}: cluster {names[c]}")
 
     # Reduced (cluster-level) moments, then across-cluster weights.
     Kn = len(uniq)
@@ -875,7 +881,23 @@ def nested_clustered_optimization(
         for b, cb in enumerate(uniq):
             ib = cluster_assets[cb]
             Kcov[a, b] = intra[ia] @ cov[np.ix_(ia, ib)] @ intra[ib]
-    across = _sub(Kcov, Kmu)
+    if objective == "min_variance":
+        across = _analytic_min_variance(Kcov)
+    else:
+        # Not the n == 1 shortcut: with one cluster this sum has the sign of
+        # that cluster's 1'Sigma^-1 mu, which is the check that matters there.
+        direction = np.linalg.pinv(Kcov + np.eye(Kn) * EPSILON) @ Kmu
+        total = float(direction.sum())
+        if not total > 1e-12 * float(np.abs(direction).sum()):
+            clusters = [names[c] for c in uniq]
+            raise ValueError(
+                f"{label}: no fully invested maximum-Sharpe portfolio exists across the "
+                f"cluster portfolios {clusters}: 1'C^-1 m <= 0 for their covariance C and "
+                "means m, so their minimum-variance mix does not earn more than the "
+                "risk-free rate of 0 (as in a falling market). Normalising would return "
+                "the lowest-Sharpe mix. Use objective='min_variance'."
+            )
+        across = direction / total
 
     w = np.zeros(n)
     for a, ca in enumerate(uniq):
@@ -1044,6 +1066,31 @@ def mean_cvar(
                   + [(None, None)] + [(0.0, None)] * t)
     result = linprog(cost, A_ub=vstack(rows, format="csr"), b_ub=np.concatenate(rhs),
                      A_eq=a_eq, b_eq=np.array([1.0]), bounds=var_bounds, method="highs")
+    if result.status == 2 and target_return is None:
+        raise RuntimeError(
+            "mean_cvar: the weight and exposure limits admit no fully invested "
+            f"portfolio ({result.message})"
+        )
+    if result.status == 2 and target_return is not None:
+        # Say which limit failed: the highest expected return the weight and
+        # exposure limits allow (an LP in w and s).
+        best = linprog(
+            np.concatenate([-mu, np.zeros(ns)]),
+            A_ub=vstack(rows[1:4], format="csr")[:, :n + ns] if gross else None,
+            b_ub=np.concatenate(rhs[1:4]) if gross else None,
+            A_eq=a_eq[:, :n + ns], b_eq=np.array([1.0]),
+            bounds=var_bounds[:n + ns], method="highs",
+        )
+        if best.status != 0:
+            raise RuntimeError(
+                "mean_cvar: the weight and exposure limits admit no fully invested "
+                f"portfolio ({result.message})"
+            )
+        raise RuntimeError(
+            f"mean_cvar: target_return {target_return:.6f} (annualised) is out of "
+            f"reach; the highest expected return these limits allow is {-best.fun:.6f} "
+            f"({result.message})"
+        )
     w = np.asarray(result.x, dtype=float)[:n] if result.x is not None else np.full(n, np.nan)
     r = _core_result(result, w, bounds, c, "mean_cvar", mu, cov, 0.0, ids,
                      min_return=target_return)
@@ -1574,23 +1621,14 @@ def _optimal_bisect(similarity: np.ndarray, indices: List[int]) -> Tuple[List[in
     if n <= 1:
         return indices, []
 
-    best_split = n // 2
-    best_cost = float("inf")
-
-    for split in range(1, n):
-        left = indices[:split]
-        right = indices[split:]
-
-        cost = 0.0
-        for li in left:
-            for ri in right:
-                cost += abs(similarity[li, ri])
-
-        avg_cost = cost / max(len(left) * len(right), 1)
-        if avg_cost < best_cost:
-            best_cost = avg_cost
-            best_split = split
-
+    # Coupling of split k is the block sum |S|[:k, k:]; a 2D prefix sum gives
+    # every split at once instead of an O(n^2) Python loop per split.
+    block = np.abs(np.asarray(similarity, dtype=float)[np.ix_(indices, indices)])
+    prefix = block.cumsum(axis=0).cumsum(axis=1)
+    k = np.arange(1, n)
+    cross = prefix[k - 1, n - 1] - prefix[k - 1, k - 1]
+    avg_cost = cross / (k * (n - k))
+    best_split = int(k[np.argmin(avg_cost)])  # first minimum, as before
     return indices[:best_split], indices[best_split:]
 
 

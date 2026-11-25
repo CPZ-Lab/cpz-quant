@@ -77,10 +77,9 @@ def _base_constraints(
     c = constraints or Constraints()
     _check_limits(c, label, allow_turnover=True)
     cons: List[Any] = [cp.sum(w) == 1]
-    if c.long_only:
-        cons.append(w >= 0)
-    else:
-        cons.append(w >= c.min_weight)
+    # Same effective floor as the native optimizers: a positive min_weight
+    # still applies when long_only=True.
+    cons.append(w >= (max(0.0, c.min_weight) if c.long_only else c.min_weight))
     cons.append(w <= c.max_weight)
     if c.max_gross_exposure is not None:
         cons.append(cp.norm1(w) <= c.max_gross_exposure)
@@ -309,6 +308,11 @@ def cardinality_constrained_cvx(
             raise NotImplementedError(
                 f"cardinality_constrained_cvx: {name} is not supported by this optimizer"
             )
+    if c.min_weight > 0:
+        raise ValueError(
+            "cardinality_constrained_cvx: a positive min_weight would force every asset "
+            "into the portfolio; use min_position for the floor of selected names"
+        )
     max_w = min(c.max_weight, 1.0)
     if min_position > max_w:
         raise ValueError(f"min_position {min_position} exceeds max_weight {max_w}")

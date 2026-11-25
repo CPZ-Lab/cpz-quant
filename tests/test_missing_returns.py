@@ -99,3 +99,19 @@ def test_select_complete_assets_counts_blanks_as_missing():
     rets["LATE"] = [float("nan")] * 50 + rets["E0"][50:]  # listed 50 days late
     assert "LATE" not in select_complete_assets(rets)
     assert len(select_complete_assets(rets)) == len(rets) - 1
+
+
+def test_select_complete_assets_returns_the_common_complete_window():
+    # A percent-change frame: every asset is complete apart from row 0. The
+    # kept series come back without that row, ready for the next step.
+    frame = _pct_change_frame()
+    out = select_complete_assets(frame)
+    assert list(out) == list(frame)
+    for k, v in out.items():
+        assert v == frame[k][1:]
+    assert len(select_k_extremes(out, k=3)) == 3
+    # With min_obs, a late listing is kept and the window starts at its listing.
+    frame["LATE"] = [float("nan")] * 51 + frame["E0"][51:]
+    out = select_complete_assets(frame, min_obs=200)
+    assert "LATE" in out and all(len(v) == len(frame["E0"]) - 51 for v in out.values())
+    assert np.all(np.isfinite(np.column_stack(list(out.values()))))

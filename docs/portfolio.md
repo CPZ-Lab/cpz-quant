@@ -73,7 +73,9 @@ with fewer than two observations instead of replacing them with zeros.
 
 The estimators, copulas and pre-selection filters raise on a missing or
 non-finite return instead of estimating from it; drop or fill blanks first
-(for example `frame.dropna()`), or use `select_complete_assets`.
+(for example `frame.dropna()`), or pass the returns through
+`select_complete_assets`, which drops assets with short histories and returns
+the rest on their common complete window.
 
 ## Views and priors
 

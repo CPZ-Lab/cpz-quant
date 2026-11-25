@@ -14,6 +14,7 @@ import numpy as np
 import pytest
 from cpz_quant.portfolio.optimization import (
     _build_matrices,
+    _cluster_labels,
     _quasi_block_diag_objective,
     build_permutation_qubo,
     hierarchical_equal_risk_contribution,
@@ -259,10 +260,49 @@ def test_nco_max_sharpe_refuses_when_no_tangency_portfolio_exists():
     # 1' Sigma^-1 mu < 0: normalising Sigma^-1 mu flips it into the
     # lowest-Sharpe mix, which is what NCO used to return.
     assert np.ones(len(mu)) @ np.linalg.solve(cov, mu) < 0
-    with pytest.raises(ValueError, match="no fully invested maximum-Sharpe"):
+    with pytest.raises(ValueError, match="nested_clustered_optimization.*no fully invested") as err:
         nested_clustered_optimization(rets, objective="max_sharpe", n_clusters=1)
-    with pytest.raises(ValueError, match="no fully invested maximum-Sharpe"):
+    assert "'SPY'" in str(err.value) and "long-only" not in str(err.value)
+    with pytest.raises(ValueError, match="nested_clustered_optimization.*no fully invested"):
         nested_clustered_optimization(rets, objective="max_sharpe")
+
+
+def _eight_etfs(seed, n_days=252):
+    rng = np.random.default_rng(seed)
+    eq, rates, gold, cm = (rng.normal(0, s, n_days) for s in (0.011, 0.006, 0.009, 0.012))
+    cols = {
+        "SPY": eq + rng.normal(0, 0.002, n_days) + 4e-4,
+        "QQQ": 1.25 * eq + rng.normal(0, 0.005, n_days) + 5e-4,
+        "EFA": 0.85 * eq + rng.normal(0, 0.005, n_days) + 2e-4,
+        "EEM": 0.95 * eq + rng.normal(0, 0.009, n_days) + 1e-4,
+        "IEF": -0.12 * eq + 0.55 * rates + rng.normal(0, 0.0015, n_days) + 1e-4,
+        "TLT": -0.3 * eq + 1.4 * rates + rng.normal(0, 0.004, n_days) + 1.5e-4,
+        "GLD": 0.05 * eq + 0.2 * rates + gold + 2e-4,
+        "DBC": 0.35 * eq + cm + 1e-4,
+    }
+    return {k: v.tolist() for k, v in cols.items()}
+
+
+def test_nco_max_sharpe_absorbs_a_cluster_with_a_negative_sum():
+    # One cluster has 1'Sigma_c^-1 mu_c < 0; the cluster-level step weights it
+    # negatively, so NCO still has a fully invested maximum-Sharpe answer.
+    rets = _eight_etfs(0)
+    ids, mu, cov = _build_matrices(rets)
+    labels, uniq = _cluster_labels(cov, "ward", None)
+    clusters = [list(np.flatnonzero(labels == c)) for c in uniq]
+    directions = [np.linalg.solve(cov[np.ix_(idx, idx)], mu[idx]) for idx in clusters]
+    assert min(d.sum() for d in directions) < 0
+    # Reference: the best Sharpe of any mix of the cluster directions u_a is
+    # sqrt(m' C^-1 m) with m_a = u_a' mu and C_ab = u_a' Sigma u_b.
+    U = np.zeros((len(ids), len(clusters)))
+    for a, (idx, d) in enumerate(zip(clusters, directions)):
+        U[idx, a] = d
+    m, C = U.T @ mu, U.T @ cov @ U
+    best = float(np.sqrt(m @ np.linalg.solve(C, m)))
+    r = nested_clustered_optimization(rets, objective="max_sharpe")
+    w = _vector(r.weights, ids)
+    assert w.sum() == pytest.approx(1.0, abs=1e-9)
+    assert (w @ mu) / np.sqrt(w @ cov @ w) == pytest.approx(best, rel=1e-6)
 
 
 def test_nco_max_sharpe_one_cluster_is_the_tangency_portfolio():

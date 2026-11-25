@@ -23,13 +23,13 @@ maturin develop --release
 
 ## Usage
 
-The Python wrapper automatically uses Rust when available:
+cpz-quant loads the extension automatically when it is built, and uses it for
+`cpz_quant.certification.compute_risk_analytics` and the indicator kernels in
+`cpz_quant.indicators._rust_accel` (SMA, EMA, WMA, KAMA, RSI, MACD, ADX, ATR,
+Bollinger bands, Garman-Klass volatility). `cpz_quant.certification.has_rust()`
+reports whether it is loaded; without it the NumPy implementations run.
 
-```python
-from cpz.risk._rust_accel import has_rust, fast_monte_carlo_var
-
-if has_rust():
-    result = fast_monte_carlo_var(returns, num_simulations=100000)
-```
-
-Falls back to NumPy/SciPy transparently if Rust is not built.
+The Monte Carlo VaR, covariance, risk parity, Ledoit-Wolf, EWMA,
+Marchenko-Pastur and HRP functions in this crate are not called by cpz-quant.
+They predate the cpz-quant 1.3.0 estimator and allocator fixes and do not
+reproduce the Python results.

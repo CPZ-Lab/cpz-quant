@@ -63,13 +63,32 @@ def select_complete_assets(returns, *, min_obs: int = None) -> Dict[str, list]: 
     """Keep only assets with a full (longest common) history — drops names with
     short samples from inception/delisting. If ``min_obs`` is given, keep assets
     with at least that many observations. Missing or non-finite values (the
-    blanks a DataFrame uses for a late listing) do not count as observations."""
-    lengths = {i: int(np.isfinite(np.asarray(returns[i], dtype=float)).sum()) for i in returns}
+    blanks a DataFrame uses for a late listing, or the first row of a
+    percent-change frame) do not count as observations.
+
+    The kept series are returned on their common complete window: aligned on
+    the most recent common length, keeping only the rows where every kept
+    asset has a finite return (as ``frame[kept].dropna()`` would), so the
+    result can go straight into an estimator or allocator. Raises when fewer
+    than two complete rows remain.
+    """
+    series = {i: np.asarray(returns[i], dtype=float) for i in returns}
+    lengths = {i: int(np.isfinite(v).sum()) for i, v in series.items()}
     if not lengths:
         return {}
     target = max(lengths.values()) if min_obs is None else min_obs
     keep = [i for i in returns if lengths[i] >= target]
-    return _subset(returns, keep)
+    if not keep:
+        return {}
+    window = min(len(series[i]) for i in keep)
+    R = np.column_stack([series[i][-window:] for i in keep])
+    complete = np.all(np.isfinite(R), axis=1)
+    if int(complete.sum()) < 2:
+        raise ValueError(
+            f"select_complete_assets: the kept assets {keep} share only "
+            f"{int(complete.sum())} complete row(s)"
+        )
+    return {aid: R[complete, j].tolist() for j, aid in enumerate(keep)}
 
 
 @frame_friendly

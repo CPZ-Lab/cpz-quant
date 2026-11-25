@@ -138,7 +138,7 @@ Portfolio selection as a QUBO problem with pluggable solvers: exact brute force,
 
 ### Rust-accelerated core
 
-The `rust/` crate (`cpz_risk_rs`, PyO3 + rayon) ships in this repo and accelerates the hot paths: certification analytics, Monte Carlo VaR, Ledoit-Wolf and EWMA covariance, Marchenko-Pastur denoising, HRP weights, and the indicator kernels. Build it with `pip install maturin && cd rust && maturin develop --release`. Everything runs identically without it — pure NumPy fallbacks are parity-tested, and `has_rust()` tells you which path is active. No silent behavior differences, only speed.
+The `rust/` crate (`cpz_risk_rs`, PyO3 + rayon) ships in this repo as an optional extension. When it is built, the Python package uses it for certification analytics (`compute_risk_analytics`) and ten indicator kernels (SMA, EMA, WMA, KAMA, RSI, MACD, ADX, ATR, Bollinger bands, Garman-Klass volatility); `has_rust()` tells you whether the extension is loaded. Without it the NumPy implementations run, and the test suite and CI exercise only that NumPy path. The crate also contains Monte Carlo VaR, covariance, risk parity, Ledoit-Wolf, EWMA, Marchenko-Pastur and HRP kernels that the Python package does not call; they predate the 1.3.0 estimator and allocator fixes and do not reproduce the Python results. Build it with `pip install maturin && cd rust && maturin develop --release`.
 
 ### Visualization
 

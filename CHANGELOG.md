@@ -14,14 +14,20 @@ All notable changes to cpz-quant are documented here. The format follows [Keep a
 - `quantum_inspired_hrp` reads solved positions as positions (the exact and
   QUBO modes used them backwards), and the default heuristic is spectral
   seriation with swap refinement, which reorders dense correlation matrices
-  (reverse Cuthill-McKee left them unsorted). Brute force is vectorised.
+  (reverse Cuthill-McKee left them unsorted). Brute force and the split search
+  are vectorised (same results): on a laptop the heuristic takes about 0.2 s
+  for 300 assets and 0.7 s for 500 (before vectorising the split search, 1 s
+  and 6.5 s), and brute force about 0.3 s for 9 assets.
 - `risk_parity` solves equal risk contribution by cyclical coordinate descent;
   negatively correlated pairs (stocks and Treasuries) no longer return NaN.
   A partial or non-positive `budget` raises. `_metrics` rejects NaN weights.
-- `nested_clustered_optimization(objective="max_sharpe")` raises when a
-  cluster or the cluster-level problem has no tangency portfolio
-  (`1'Sigma^-1 mu <= 0`) instead of returning the lowest-Sharpe mix.
-- `mean_cvar` is an exact Rockafellar-Uryasev LP (HiGHS). `mean_cvar`,
+- `nested_clustered_optimization(objective="max_sharpe")` raises when the
+  cluster-level problem has no fully invested tangency portfolio
+  (`1'C^-1 m <= 0` for the cluster portfolios, as in a falling market) instead
+  of returning the lowest-Sharpe mix. A single cluster with a negative
+  `1'Sigma^-1 mu` is still fine: the cluster-level step weights it negatively.
+- `mean_cvar` is an exact Rockafellar-Uryasev LP (HiGHS); an unreachable
+  `target_return` raises with the highest return the limits allow. `mean_cvar`,
   `robust_mvo`, `max_diversification`, `min_tracking_error`,
   `turnover_penalized` and `alpha_risk_cost_optimize` enforce the gross cap,
   reject unsupported limits and raise on failed or infeasible solves. Gross
@@ -35,7 +41,9 @@ All notable changes to cpz-quant are documented here. The format follows [Keep a
   de Silva & Thorley correlation in [-1, 1].
 - `mean_variance_cvx`, `mean_cvar_cvx`, `robust_mean_variance_cvx` and
   `cardinality_constrained_cvx` raise on sector, factor and tracking-error
-  limits instead of ignoring them. `robust_mean_variance_cvx` sizes its
+  limits instead of ignoring them, and enforce a positive `min_weight` with
+  `long_only=True` (only `w >= 0` was applied; `cardinality_constrained_cvx`
+  raises on it and points to `min_position`). `robust_mean_variance_cvx` sizes its
   uncertainty set with the standard error of the annualised mean
   (`252 * cov / T`, it was `cov / T`).
 - `mean_risk_optimize` accepts Polars, pandas and dict inputs with their
@@ -52,7 +60,17 @@ All notable changes to cpz-quant are documented here. The format follows [Keep a
   eigenvalue method and keeps each variance; `gerber_cov` is the PSD Gerber
   et al. (2021) statistic (matches riskfolio-lib).
 - Covariance estimators, copulas and pre-selection filters raise on missing or
-  non-finite returns; `select_complete_assets` counts blanks as missing.
+  non-finite returns. `select_complete_assets` counts blanks as missing and
+  returns the kept assets on their common complete window (as
+  `frame[kept].dropna()` would), so its output feeds the next step directly.
+- New errors: `gerber_cov` with `threshold` outside (0, 1) or a series that
+  never crosses it; `denoise_mp` with no more observations than assets
+  (T <= N) or a Marchenko-Pastur fit that does not converge; `ewma_cov` with a
+  non-positive `halflife`; a zero-variance asset in `ledoit_wolf`,
+  `denoise_mp`, `gerber_cov` or `risk_parity`.
+- README, docs and `rust/README.md` no longer say the Rust crate accelerates
+  Ledoit-Wolf, EWMA, Marchenko-Pastur or HRP: the Python package never calls
+  those kernels, and they still use the pre-1.3.0 formulas.
 
 ## [1.2.0] - 2026-09-17
 

@@ -86,8 +86,12 @@ def test_unsupported_limits_raise(run, limit):
 
 def test_mean_cvar_unreachable_target_raises():
     # A 60% target returned a 27% portfolio with no error.
-    with pytest.raises(RuntimeError, match="infeasible"):
-        mean_cvar(_etfs(), target_return=0.60, constraints=Constraints(long_only=True))
+    rets = _etfs()
+    with pytest.raises(RuntimeError, match="target_return 0.600000") as err:
+        mean_cvar(rets, target_return=0.60, constraints=Constraints(long_only=True))
+    # Long-only and fully invested: the best attainable return is the top asset's.
+    top = max(np.mean(v) * 252 for v in rets.values())
+    assert f"allow is {top:.6f}" in str(err.value)
 
 
 def test_mean_cvar_matches_the_exact_cvxpy_program():
@@ -165,6 +169,19 @@ def test_cvx_optimisers_do_not_drop_limits(name, limit):
     fn = getattr(_cvx(), name)
     with pytest.raises(NotImplementedError, match=next(iter(limit))):
         fn(_etfs(), constraints=Constraints(long_only=True, max_weight=0.45, **limit))
+
+
+@pytest.mark.parametrize("name", ["mean_variance_cvx", "mean_cvar_cvx", "robust_mean_variance_cvx"])
+def test_cvx_positive_min_weight_applies_when_long_only(name):
+    # Only w >= 0 was added for long_only, so a 10% floor was ignored.
+    r = getattr(_cvx(), name)(_etfs(), constraints=Constraints(long_only=True, min_weight=0.1))
+    assert min(r.weights.values()) >= 0.1 - 1e-5  # solver accuracy
+
+
+def test_cvx_cardinality_rejects_a_positive_min_weight():
+    with pytest.raises(ValueError, match="min_position"):
+        _cvx().cardinality_constrained_cvx(_etfs(), max_assets=3,
+                                           constraints=Constraints(long_only=True, min_weight=0.1))
 
 
 def test_cvx_net_exposure_below_full_investment_raises():
