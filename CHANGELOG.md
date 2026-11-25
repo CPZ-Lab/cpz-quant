@@ -9,7 +9,8 @@ All notable changes to cpz-quant are documented here. The format follows [Keep a
   stay "best" for the whole search because NaN compares False against every
   score. Unscored settings stay in `results`; when no setting has a finite
   score, or the grid is empty, it raises `ValueError` instead of returning a
-  blank best or a score of 0.0.
+  blank best or a score of 0.0. A score that is not a real number or None
+  (a string, an array, a bool) raises `TypeError`.
 
 ## [1.2.0] - 2026-09-17
 

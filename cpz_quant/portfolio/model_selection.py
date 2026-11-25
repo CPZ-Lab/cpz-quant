@@ -17,6 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from itertools import combinations, product
 from math import comb, isfinite
+from numbers import Real
 from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
@@ -274,12 +275,14 @@ def grid_search(
         param_grid: ``{param: [values]}``.
         scorer: maps a :class:`CVResult` to a scalar to maximize (default OOS Sharpe).
 
-    A setting whose score is not a finite number (``None``, NaN, inf: the
-    scorer could not score it) stays in ``results`` with that score and is
-    never selected, wherever it sits in the grid.
+    A setting whose score is ``None``, NaN or inf (the scorer could not score
+    it) stays in ``results`` with that score and is never selected, wherever
+    it sits in the grid.
 
     Raises:
         ValueError: the grid is empty, or no setting has a finite score.
+        TypeError: the scorer returned something other than a real number
+            or None (a string, an array, a bool).
     """
     keys = list(param_grid.keys())
     best = None
@@ -291,7 +294,7 @@ def grid_search(
         results.append({"params": params, "score": score, "oos_sharpe": cvres.oos_sharpe})
         # NaN compares False against everything, so an unscored first
         # setting used to stay "best" for the whole search.
-        if not _finite_score(score):
+        if _unscored(score, params):
             continue
         if best is None or float(score) > best[1]:
             best = (params, float(score))
@@ -305,8 +308,17 @@ def grid_search(
     return GridSearchResult(best_params=best[0], best_score=best[1], results=results)
 
 
-def _finite_score(score) -> bool:
-    try:
-        return score is not None and isfinite(float(score))
-    except (TypeError, ValueError):
-        return False
+def _unscored(score, params) -> bool:
+    """True for a score the scorer could not give: None, NaN or inf.
+
+    Anything that is not a real number (a string, a vector, a bool) is a
+    scorer bug, not a missing score, and raises TypeError.
+    """
+    if score is None:
+        return True
+    if isinstance(score, bool) or not isinstance(score, Real):
+        raise TypeError(
+            f"grid_search: scorer must return a real number or None, got "
+            f"{type(score).__name__} {score!r} for {params}"
+        )
+    return not isfinite(float(score))

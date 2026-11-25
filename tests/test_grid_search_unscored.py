@@ -58,3 +58,16 @@ def test_no_finite_score_raises_instead_of_returning_a_blank_best():
 def test_empty_grid_raises_instead_of_a_score_of_zero():
     with pytest.raises(ValueError, match="no settings"):
         grid_search(_factory, {"cash": []}, _returns(), WalkForward(n_splits=3))
+
+
+@pytest.mark.parametrize("bad", ["0.5", np.array([0.1, 0.2]), True])
+def test_a_score_that_is_not_a_real_number_is_a_scorer_bug(bad):
+    with pytest.raises(TypeError, match="scorer must return a real number or None"):
+        grid_search(_factory, {"cash": [True, False]}, _returns(), WalkForward(n_splits=3),
+                    scorer=lambda r: bad)
+
+
+def test_numpy_float_scores_are_real_numbers():
+    gs = grid_search(_factory, {"cash": [True, False]}, _returns(), WalkForward(n_splits=3),
+                     scorer=lambda r: np.float64("nan") if r.oos_vol_ann == 0 else np.float64(r.oos_sharpe))
+    assert gs.best_params == {"cash": False}
