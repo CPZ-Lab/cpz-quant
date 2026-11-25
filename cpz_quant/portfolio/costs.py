@@ -100,9 +100,11 @@ class CostModel:
         """Cost of one trade (one leg, a buy or a sell) split into its parts, in bps.
 
         A sell costs the same as a buy of the same size: impact depends on
-        ``abs(notional)``. Every model needs ``adv > 0``; the sqrt and
-        Almgren-Chriss models also need ``volatility > 0`` (``ValueError``
-        otherwise).
+        ``abs(notional)``. When impact is priced (non-zero notional and
+        coefficient) every model needs ``adv > 0`` and the sqrt and
+        Almgren-Chriss models also ``volatility > 0`` (``ValueError``
+        otherwise). With ``impact_coefficient=0`` (spread and commission
+        only) no market inputs are needed.
         """
         spread = self.spread_bps / 2.0
         if self.impact_model == "almgren_chriss":
@@ -183,6 +185,8 @@ def almgren_chriss(
         beta: Temporary impact exponent.
         participation_rate: Fraction of ADV consumed per time unit.
     """
+    if notional == 0 or (gamma == 0 and eta == 0):
+        return CostEstimate()  # nothing traded, or impact not priced: no inputs needed
     _require_liquidity(adv, volatility, model="Almgren-Chriss", needs_volatility=True)
     q_over_v = abs(notional) / adv  # a sell moves the price as much as a buy
     perm = gamma * volatility * (q_over_v ** alpha) * 10000.0
@@ -214,7 +218,11 @@ def linear_impact(
 
     Raises:
         ValueError: ``adv`` is not positive (unknown liquidity is not free).
+            A zero notional or a zero coefficient has zero impact and needs
+            no ADV.
     """
+    if notional == 0 or coefficient == 0:
+        return 0.0
     _require_liquidity(adv, model="linear")
     return coefficient * (abs(notional) / adv) * 10000.0
 
@@ -241,8 +249,11 @@ def sqrt_impact(
     Raises:
         ValueError: ``adv`` or ``volatility`` is missing or not positive. A
             missing volatility used to become 1.0 (100% a day), which made
-            the impact about 50 times too large for a typical stock.
+            the impact about 50 times too large for a typical stock. A zero
+            notional or a zero coefficient has zero impact and needs neither.
     """
+    if notional == 0 or coefficient == 0:
+        return 0.0
     _require_liquidity(adv, volatility, model="square-root", needs_volatility=True)
     return coefficient * float(volatility) * ((abs(notional) / adv) ** exponent) * 10000.0  # type: ignore[arg-type]
 
@@ -478,9 +489,11 @@ def turnover_analysis(
         target_weights: ``{symbol: target_weight}``.
         cost_model: Cost model for per-asset cost estimation.
         adv: ``{symbol: average_daily_volume}``; required for every traded
-            symbol when *cost_model* is given.
+            symbol when *cost_model* prices market impact (any model except
+            ``impact_coefficient=0``).
         volatility: ``{symbol: daily_volatility}``; required for every traded
-            symbol when the model is sqrt or Almgren-Chriss.
+            symbol when the model is sqrt (with a non-zero coefficient) or
+            Almgren-Chriss.
         portfolio_value: Total portfolio value for notional calculation.
 
     Raises:
@@ -513,8 +526,11 @@ def turnover_analysis(
     def _bad(value: Optional[float]) -> bool:
         return value is None or not (value == value and value > 0)
 
-    no_adv = [s for s in traded if _bad(adv_map.get(s))]
-    needs_vol = cost_model.impact_model in ("sqrt", "almgren_chriss")
+    # A model that prices no impact (spread and commission only) needs no
+    # market inputs; one that does needs them for every traded symbol.
+    prices_impact = cost_model.impact_model == "almgren_chriss" or cost_model.impact_coefficient != 0
+    needs_vol = prices_impact and cost_model.impact_model in ("sqrt", "almgren_chriss")
+    no_adv = [s for s in traded if prices_impact and _bad(adv_map.get(s))]
     no_vol = [s for s in traded if needs_vol and _bad(vol_map.get(s))]
     if no_adv or no_vol:
         parts = []
@@ -528,7 +544,7 @@ def turnover_analysis(
     book_cost_bps = 0.0
     for sym in traded:
         dw = abs(target_weights.get(sym, 0.0) - current_weights.get(sym, 0.0))
-        cost_bps = cost_model.estimate(dw * portfolio_value, adv_map[sym], vol_map.get(sym, 0.0))
+        cost_bps = cost_model.estimate(dw * portfolio_value, adv_map.get(sym, 0.0), vol_map.get(sym, 0.0))
         per_asset_cost[sym] = round(cost_bps, 4)
         # bps of the book: each trade's bps weighted by the share of the book it trades.
         book_cost_bps += dw * cost_bps

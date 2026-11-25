@@ -13,6 +13,7 @@ import pytest
 from cpz_quant.portfolio import (
     CostModel,
     WalkForward,
+    almgren_chriss,
     alpha_beta_decomposition,
     alpha_decay_capacity,
     brinson_fachler,
@@ -21,6 +22,7 @@ from cpz_quant.portfolio import (
     fundamental_factors,
     grid_search,
     hierarchical_risk_parity,
+    linear_impact,
     risk_attribution,
     rolling_attribution,
     sqrt_impact,
@@ -72,6 +74,35 @@ def test_3045_missing_liquidity_inputs_raise_instead_of_being_invented():
                             cost_model=CostModel(impact_model="linear"),
                             adv={"A": 1e8, "B": 1e8}, portfolio_value=50e6)
     assert lin.estimated_cost_bps > 0
+
+
+@pytest.mark.parametrize("model", ["sqrt", "linear"])
+def test_3045_spread_only_model_needs_no_market_inputs(model):
+    # impact_coefficient=0 prices spread and commission only: no ADV or
+    # volatility is needed, and a zero notional has zero impact (#9's
+    # alpha-risk-cost optimizer calls estimate(0.0, 0.0, 0.0)).
+    cm = CostModel(spread_bps=5, commission_bps=1, impact_coefficient=0, impact_model=model)
+    assert cm.estimate(0.0, 0.0, 0.0) == pytest.approx(3.5)
+    assert cm.estimate(2e6, 0.0, 0.0) == pytest.approx(3.5)
+    res = turnover_analysis({"A": 0.5, "B": 0.5}, {"A": 0.47, "B": 0.53}, cost_model=cm,
+                            portfolio_value=50e6)
+    # 3.5 bps on 6% of the book traded = 0.21 bps of the book, $1,050.
+    assert res.estimated_cost_bps == pytest.approx(0.21)
+    assert res.estimated_cost_usd == pytest.approx(1050.0)
+
+
+def test_3045_zero_notional_has_zero_impact_in_every_model():
+    assert sqrt_impact(0.0, 0.0) == 0.0
+    assert sqrt_impact(2e6, 0.0, coefficient=0.0) == 0.0
+    assert linear_impact(0.0, 0.0) == 0.0
+    assert almgren_chriss(0.0, 0.0, 0.0).total_cost_bps == 0.0
+    assert almgren_chriss(2e6, 0.0, 0.0, gamma=0.0, eta=0.0).total_cost_bps == 0.0
+    assert CostModel(impact_model="almgren_chriss").estimate(0.0, 0.0, 0.0) == pytest.approx(2.5)
+    # Impact that is actually priced still needs the inputs.
+    with pytest.raises(ValueError, match="adv"):
+        linear_impact(2e6, 0.0)
+    with pytest.raises(ValueError, match="adv"):
+        almgren_chriss(2e6, 0.0, 0.02)
 
 
 def test_3045_without_a_cost_model_the_cost_is_unknown_not_zero():
