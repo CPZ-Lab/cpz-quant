@@ -29,9 +29,37 @@ from scipy import stats
 EPSILON = 1e-12
 
 
+def _finite_matrix(X: np.ndarray, label: str) -> np.ndarray:
+    """A (T, N) float matrix with no missing values, or a ValueError.
+
+    Kendall's tau of a pair with a NaN is NaN and ranks treat NaN as data, so
+    a single blank day would otherwise become a zero correlation (or an
+    identity matrix for a percent-change frame, whose first row is blank).
+    """
+    X = np.asarray(X, dtype=float)
+    if X.ndim != 2 or X.shape[0] < 2 or X.shape[1] < 1:
+        raise ValueError(f"{label}: returns must be a (T, N) matrix with T >= 2")
+    bad = ~np.isfinite(X)
+    if bad.any():
+        row, col = (int(v[0]) for v in np.nonzero(bad))
+        raise ValueError(
+            f"{label}: returns contain {int(bad.sum())} missing or non-finite value(s); "
+            f"the first is column {col} at row {row}. Drop or fill them first "
+            "(for example frame.dropna())."
+        )
+    return X
+
+
+def _kendall_tau(x: np.ndarray, y: np.ndarray) -> float:
+    tau, _ = stats.kendalltau(x, y)
+    if not np.isfinite(tau):
+        raise ValueError("Kendall's tau is undefined for a constant return series")
+    return float(tau)
+
+
 def pseudo_observations(X: np.ndarray) -> np.ndarray:
     """Map each column to (0,1) uniforms via ranks: u = rank / (T+1)."""
-    X = np.asarray(X, dtype=float)
+    X = _finite_matrix(X, "pseudo_observations")
     T = X.shape[0]
     U = np.empty_like(X)
     for j in range(X.shape[1]):
@@ -57,9 +85,7 @@ def _kendall_correlation(X: np.ndarray) -> np.ndarray:
     R = np.eye(N)
     for i in range(N):
         for j in range(i + 1, N):
-            tau, _ = stats.kendalltau(X[:, i], X[:, j])
-            if not np.isfinite(tau):
-                tau = 0.0
+            tau = _kendall_tau(X[:, i], X[:, j])
             R[i, j] = R[j, i] = np.sin(np.pi * tau / 2.0)
     return _nearest_psd_corr(R)
 
@@ -71,7 +97,7 @@ class GaussianCopula:
 
     @classmethod
     def fit(cls, X: np.ndarray) -> "GaussianCopula":
-        return cls(correlation=_kendall_correlation(np.asarray(X, dtype=float)))
+        return cls(correlation=_kendall_correlation(_finite_matrix(X, "GaussianCopula.fit")))
 
     def sample(self, n: int, random_state: Optional[int] = None) -> np.ndarray:
         rng = np.random.default_rng(random_state)
@@ -90,7 +116,7 @@ class StudentTCopula:
 
     @classmethod
     def fit(cls, X: np.ndarray, dof_grid=None) -> "StudentTCopula":
-        X = np.asarray(X, dtype=float)
+        X = _finite_matrix(X, "StudentTCopula.fit")
         R = _kendall_correlation(X)
         U = pseudo_observations(X)
         U = np.clip(U, 1e-6, 1 - 1e-6)
@@ -144,8 +170,8 @@ class ClaytonCopula:
 
     @classmethod
     def fit(cls, X: np.ndarray) -> "ClaytonCopula":
-        tau, _ = stats.kendalltau(X[:, 0], X[:, 1])
-        tau = float(np.clip(tau, 1e-3, 0.99))
+        X = _finite_matrix(X, "ClaytonCopula.fit")
+        tau = float(np.clip(_kendall_tau(X[:, 0], X[:, 1]), 1e-3, 0.99))
         return cls(theta=2.0 * tau / (1.0 - tau))
 
     def sample(self, n: int, random_state: Optional[int] = None) -> np.ndarray:
@@ -167,8 +193,8 @@ class GumbelCopula:
 
     @classmethod
     def fit(cls, X: np.ndarray) -> "GumbelCopula":
-        tau, _ = stats.kendalltau(X[:, 0], X[:, 1])
-        tau = float(np.clip(tau, 1e-3, 0.99))
+        X = _finite_matrix(X, "GumbelCopula.fit")
+        tau = float(np.clip(_kendall_tau(X[:, 0], X[:, 1]), 1e-3, 0.99))
         return cls(theta=1.0 / (1.0 - tau))
 
     def sample(self, n: int, random_state: Optional[int] = None) -> np.ndarray:
@@ -218,9 +244,10 @@ def fit_copula(returns: np.ndarray, family: str = "student-t"):
     fam = _FAMILIES.get(family)
     if fam is None:
         raise ValueError(f"Unknown copula family {family!r}. Use: {list(_FAMILIES)}")
-    if family in ("clayton", "gumbel") and np.asarray(returns).shape[1] != 2:
+    X = _finite_matrix(returns, "fit_copula")
+    if family in ("clayton", "gumbel") and X.shape[1] != 2:
         raise ValueError(f"{family} copula is bivariate; pass exactly 2 assets")
-    return fam.fit(np.asarray(returns, dtype=float))  # type: ignore[attr-defined]
+    return fam.fit(X)  # type: ignore[attr-defined]
 
 
 def synthetic_returns(
@@ -236,7 +263,7 @@ def synthetic_returns(
     them back through each asset's empirical marginal. Use for stress testing,
     capacity/what-if analysis, and Monte-Carlo of tail-aware portfolios.
     """
-    R = np.asarray(returns, dtype=float)
+    R = _finite_matrix(returns, "synthetic_returns")
     copula = fit_copula(R, family)
     U = copula.sample(n_samples, random_state=random_state)
     out = np.empty_like(U)

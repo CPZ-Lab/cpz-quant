@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import List, Optional
+from typing import List, Mapping, Optional
 
 import numpy as np
 from scipy import optimize as sp_opt
@@ -194,6 +194,47 @@ class MeanRiskResult:
     method: str = "mean_risk"
 
 
+def _scenario_matrix(asset_returns, asset_ids: Optional[List[str]]):
+    """(T, N) scenario matrix plus asset ids from an array or a mapping.
+
+    A mapping (also what a Polars/pandas frame becomes) supplies its keys as
+    the asset ids; series of unequal length are aligned on their most recent
+    common window, as in the other allocators.
+    """
+    if isinstance(asset_returns, Mapping):
+        keys = [str(k) for k in asset_returns]
+        if not keys:
+            raise ValueError("asset_returns must contain at least one asset")
+        if asset_ids is not None and list(asset_ids) != keys:
+            raise ValueError("asset_ids must match the keys/columns of asset_returns")
+        arrays = [np.asarray(asset_returns[k], dtype=float) for k in asset_returns]
+        if any(a.ndim != 1 for a in arrays):
+            raise ValueError("each asset's returns must be a 1D series")
+        t = min(a.size for a in arrays)
+        R = np.column_stack([a[-t:] for a in arrays])
+        ids = keys
+    else:
+        R = np.asarray(asset_returns, dtype=float)
+        if R.ndim != 2:
+            raise ValueError("asset_returns must be 2-D (T observations x N assets)")
+        ids = list(asset_ids) if asset_ids is not None else [f"asset_{i}" for i in range(R.shape[1])]
+        if len(ids) != R.shape[1]:
+            raise ValueError(f"asset_ids has {len(ids)} names for {R.shape[1]} columns")
+    if R.shape[0] < 2 or R.shape[1] < 1:
+        raise ValueError("asset_returns needs at least 2 observations of at least 1 asset")
+    bad = ~np.isfinite(R)
+    if bad.any():
+        row, col = (int(v[0]) for v in np.nonzero(bad))
+        raise ValueError(
+            f"asset_returns contain {int(bad.sum())} missing or non-finite value(s); the "
+            f"first is {ids[col]!r} at row {row}. Drop or fill them first (e.g. frame.dropna())."
+        )
+    return R, ids
+
+
+_OBJECTIVES = ("min_risk", "max_ratio", "max_return", "max_utility")
+
+
 @frame_friendly
 def mean_risk_optimize(
     asset_returns,
@@ -208,25 +249,42 @@ def mean_risk_optimize(
     asset_ids: Optional[List[str]] = None,
     n_restarts: int = 3,
     rf: float = 0.0,
+    max_risk: Optional[float] = None,
 ) -> MeanRiskResult:
     """Optimize portfolio weights against any risk measure.
 
     Args:
-        asset_returns: (T, N) matrix of per-period asset returns.
+        asset_returns: per-period asset returns as a (T, N) array, a
+            ``{asset_id: [returns]}`` mapping, or a Polars/pandas DataFrame
+            (numeric columns become assets and keep their names).
         risk_measure: objective risk measure (from :class:`RiskMeasure`).
         objective: ``min_risk`` (minimize the risk measure), ``max_ratio``
-            (maximize mean-excess / risk), ``max_return`` (subject to risk),
-            or ``max_utility`` (mean - risk_aversion * risk).
+            (maximize mean-excess / risk), ``max_return`` (maximize the mean
+            subject to ``risk <= max_risk``), or ``max_utility``
+            (mean - risk_aversion * risk).
         beta: confidence for tail/drawdown measures.
         min_weight/max_weight: per-asset bounds (long-only by default).
         budget: sum of weights (1.0 = fully invested).
+        asset_ids: names for the columns of an array input.
+        max_risk: upper limit on the risk measure (per-period units). Required
+            for ``max_return``; a hard constraint for every objective.
+
+    Raises:
+        ValueError: on invalid input, or ``max_return`` without ``max_risk``.
+        RuntimeError: when no restart converges to weights within the limits.
     """
-    R = np.asarray(asset_returns, dtype=float)
-    if R.ndim != 2:
-        raise ValueError("asset_returns must be 2-D (T observations x N assets)")
+    if objective not in _OBJECTIVES:
+        raise ValueError(f"Unknown objective {objective!r}. Use one of {_OBJECTIVES}")
+    if objective == "max_return" and max_risk is None:
+        raise ValueError(
+            "max_return needs a risk limit: pass max_risk (in the units of the risk "
+            "measure); without one it just buys the single highest-return asset"
+        )
+    if max_risk is not None and (not np.isfinite(max_risk) or max_risk < 0):
+        raise ValueError(f"max_risk must be finite and >= 0, got {max_risk}")
+    R, ids = _scenario_matrix(asset_returns, asset_ids)
     T, N = R.shape
     mu = R.mean(axis=0)
-    ids = asset_ids or [f"asset_{i}" for i in range(N)]
 
     def port_risk(w: np.ndarray) -> float:
         return compute_risk(R @ w, risk_measure, beta=beta)
@@ -240,32 +298,41 @@ def mean_risk_optimize(
             return -pm
         if objective == "max_utility":
             return -(pm - risk_aversion * pr)
-        if objective == "max_ratio":
-            return -((pm - rf) / (pr + EPSILON))
-        raise ValueError(f"Unknown objective {objective!r}")
+        return -((pm - rf) / (pr + EPSILON))
 
     bounds = [(min_weight, max_weight)] * N
     cons = [{"type": "eq", "fun": lambda w: np.sum(w) - budget}]
+    if max_risk is not None:
+        cons.append({"type": "ineq", "fun": lambda w: max_risk - port_risk(w)})
+    tol = 1e-6
+
+    def feasible(w: np.ndarray) -> bool:
+        return bool(
+            np.all(np.isfinite(w))
+            and abs(float(np.sum(w)) - budget) <= tol
+            and np.all(w >= min_weight - tol) and np.all(w <= max_weight + tol)
+            and (max_risk is None or port_risk(w) <= max_risk + tol * max(1.0, abs(max_risk)))
+        )
 
     best = None
+    failures = []
     rng = np.random.default_rng(42)
     for k in range(max(1, n_restarts)):
         x0 = np.full(N, budget / N) if k == 0 else rng.dirichlet(np.ones(N)) * budget
-        try:
-            res = sp_opt.minimize(neg_objective, x0, method="SLSQP", bounds=bounds,
-                                  constraints=cons, options={"maxiter": 500, "ftol": 1e-10})
-            if res.success and (best is None or res.fun < best.fun):
-                best = res
-        except Exception:
-            continue
+        res = sp_opt.minimize(neg_objective, x0, method="SLSQP", bounds=bounds,
+                              constraints=cons, options={"maxiter": 500, "ftol": 1e-10})
+        if not res.success:
+            failures.append(str(res.message))
+        elif not feasible(res.x):
+            failures.append("solver point breaks the weight, budget or risk limits")
+        elif best is None or res.fun < best.fun:
+            best = res
     if best is None:
-        w = np.full(N, budget / N)
-        success = False
-    else:
-        w = best.x
-        success = True
+        raise RuntimeError(
+            f"mean_risk_optimize: no restart converged to a feasible portfolio: {failures}"
+        )
 
-    w = np.where(np.abs(w) < 1e-8, 0.0, w)
+    w = np.where(np.abs(best.x) < 1e-8, 0.0, best.x)
     pr = port_risk(w)
     pm = float(mu @ w)
     return MeanRiskResult(
@@ -275,5 +342,5 @@ def mean_risk_optimize(
         risk=float(pr),
         expected_return=pm,
         ratio=float((pm - rf) / (pr + EPSILON)),
-        success=success,
+        success=True,
     )

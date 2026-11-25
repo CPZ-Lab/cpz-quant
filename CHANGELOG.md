@@ -4,6 +4,56 @@ All notable changes to cpz-quant are documented here. The format follows [Keep a
 
 ## [Unreleased]
 
+- `hierarchical_risk_parity` splits each cluster by inverse variance, as in
+  Lopez de Prado (2016) and PyPortfolioOpt (it used inverse volatility), and
+  returns 100% for a single asset instead of crashing. `schur_complementary_allocation`
+  and `quantum_inspired_hrp` use the same split.
+- `hierarchical_equal_risk_contribution` follows the dendrogram down to K
+  clusters (Raffinot 2018; matches riskfolio-lib) instead of halving the
+  ordered cluster list; an out-of-range `n_clusters` raises.
+- `quantum_inspired_hrp` reads solved positions as positions (the exact and
+  QUBO modes used them backwards), and the default heuristic is spectral
+  seriation with swap refinement, which reorders dense correlation matrices
+  (reverse Cuthill-McKee left them unsorted). Brute force is vectorised.
+- `risk_parity` solves equal risk contribution by cyclical coordinate descent;
+  negatively correlated pairs (stocks and Treasuries) no longer return NaN.
+  A partial or non-positive `budget` raises. `_metrics` rejects NaN weights.
+- `nested_clustered_optimization(objective="max_sharpe")` raises when a
+  cluster or the cluster-level problem has no tangency portfolio
+  (`1'Sigma^-1 mu <= 0`) instead of returning the lowest-Sharpe mix.
+- `mean_cvar` is an exact Rockafellar-Uryasev LP (HiGHS). `mean_cvar`,
+  `robust_mvo`, `max_diversification`, `min_tracking_error`,
+  `turnover_penalized` and `alpha_risk_cost_optimize` enforce the gross cap,
+  reject unsupported limits and raise on failed or infeasible solves. Gross
+  caps enter through smooth epigraph variables, and a cap made redundant by a
+  long-only book is not passed to SLSQP, so `min_variance` and `max_sharpe`
+  reach the optimum at `max_gross_exposure=1.0` in any column order.
+- `alpha_risk_cost_optimize` prices each trade with the cost model per unit
+  traded (new `portfolio_value`, `adv`, `daily_volatility` arguments for
+  size-dependent impact, which now raises when they are missing),
+  `cost_model=None` is zero cost, and `transfer_coefficient` is the Clarke,
+  de Silva & Thorley correlation in [-1, 1].
+- `mean_variance_cvx`, `mean_cvar_cvx`, `robust_mean_variance_cvx` and
+  `cardinality_constrained_cvx` raise on sector, factor and tracking-error
+  limits instead of ignoring them. `robust_mean_variance_cvx` sizes its
+  uncertainty set with the standard error of the annualised mean
+  (`252 * cov / T`, it was `cov / T`).
+- `mean_risk_optimize` accepts Polars, pandas and dict inputs with their
+  names, requires `max_risk` for `max_return` (enforced for every objective),
+  and raises instead of returning equal weights when no restart converges.
+- `entropy_pooling` preconditions the views, reports `converged=True` only
+  when every view is met, and adds `max_view_error`.
+- Covariance: `oracle_approximating` is the Chen et al. (2010) OAS
+  (equals scikit-learn); `ledoit_wolf` uses each paper's published intensity
+  (`covCor.m`, `covMarket.m`, sklearn for identity), is unit-invariant, and its
+  `single_factor` target is the single-index model; `ewma_cov` normalises its
+  weights (pandas `ewm(...).cov(bias=True)`), uses an exact half-life and
+  enforces `min_periods`; `denoise_mp` is Lopez de Prado's constant residual
+  eigenvalue method and keeps each variance; `gerber_cov` is the PSD Gerber
+  et al. (2021) statistic (matches riskfolio-lib).
+- Covariance estimators, copulas and pre-selection filters raise on missing or
+  non-finite returns; `select_complete_assets` counts blanks as missing.
+
 ## [1.2.0] - 2026-09-17
 
 - Expand `cpz_quant.indicators` from 32 to 91 indicator functions and add all

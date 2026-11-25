@@ -12,16 +12,16 @@ from cpz_quant.portfolio.optimization import (
 )
 
 
-def _returns(n=800, seed=1):
+def _returns(n=800, seed=1, drift=0.0):
     rng = np.random.default_rng(seed)
-    f1 = rng.normal(0, 0.01, n)
-    f2 = rng.normal(0, 0.01, n)
+    f1 = rng.normal(drift, 0.01, n)
+    f2 = rng.normal(drift, 0.01, n)
     cols = {
         "A": (f1 + rng.normal(0, 0.003, n)),
         "B": (f1 + rng.normal(0, 0.004, n)),
         "C": (f2 + rng.normal(0, 0.003, n)),
         "D": (f2 + rng.normal(0, 0.005, n)),
-        "E": (rng.normal(0, 0.02, n)),
+        "E": (rng.normal(drift, 0.02, n)),
     }
     return {k: v.tolist() for k, v in cols.items()}
 
@@ -42,7 +42,10 @@ class TestNCO:
         assert _port_var(rets, r.weights) <= _port_var(rets, eq) + 1e-12
 
     def test_max_sharpe_runs(self):
-        r = nested_clustered_optimization(_returns(), objective="max_sharpe")
+        # Positive drift: every cluster has a fully invested tangency portfolio.
+        # (Zero-drift noise can leave a cluster with 1'Sigma^-1 mu < 0, which
+        # now raises instead of returning that cluster's lowest-Sharpe mix.)
+        r = nested_clustered_optimization(_returns(drift=1e-3), objective="max_sharpe")
         assert sum(r.weights.values()) == pytest.approx(1.0, abs=1e-6)
         assert r.info["n_clusters"] >= 2
 

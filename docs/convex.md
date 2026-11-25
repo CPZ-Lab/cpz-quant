@@ -43,8 +43,10 @@ res = robust_mean_variance_cvx(
 )
 ```
 
-- **Ellipsoidal**: worst case over an ellipsoid scaled by the estimation-error covariance `cov / T`; a second-order-cone penalty.
-- **Box**: worst case over per-asset intervals of `kappa` standard errors.
+- **Ellipsoidal**: worst case over an ellipsoid scaled by the estimation-error covariance of the annualised mean, `252 * cov / T` (with `cov` annualised); a second-order-cone penalty. With `kappa=1` the penalty is one standard error of the portfolio's annualised mean return.
+- **Box**: worst case over per-asset intervals of `kappa` standard errors of the annualised mean.
+
+Every cvxpy optimizer enforces full investment, weight bounds, `max_gross_exposure` and `max_turnover` (with `prev_weights`) as hard constraints. Sector limits, factor limits and `max_tracking_error` need data `Constraints` does not carry, so they raise `NotImplementedError` rather than being ignored.
 
 ## Cardinality constraints
 

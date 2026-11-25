@@ -17,10 +17,32 @@ EPSILON = 1e-15
 TRADING_DAYS = 252
 
 
-def _matrix(returns: Mapping[str, Sequence[float]]):
-    ids = list(returns.keys())
-    min_len = min((len(returns[i]) for i in ids), default=0)
-    R = np.column_stack([np.asarray(returns[i][-min_len:], dtype=float) for i in ids]) if ids else np.zeros((0, 0))
+def _finite_series(returns: Mapping[str, Sequence[float]], label: str) -> Dict[str, np.ndarray]:
+    """Each series as a float array; a missing or non-finite value raises.
+
+    NaN compares False and sorts last, so a blank day would otherwise drop an
+    asset as "zero variance" or push it out of a top-k ranking.
+    """
+    out = {}
+    for aid in returns:
+        values = np.asarray(returns[aid], dtype=float)
+        bad = ~np.isfinite(values)
+        if bad.any():
+            raise ValueError(
+                f"{label}: returns for {aid!r} contain {int(bad.sum())} missing or "
+                f"non-finite value(s) (first at position {int(np.flatnonzero(bad)[0])}); "
+                "drop or fill them first (for example frame.dropna()), or use "
+                "select_complete_assets to drop short histories"
+            )
+        out[aid] = values
+    return out
+
+
+def _matrix(returns: Mapping[str, Sequence[float]], label: str):
+    series = _finite_series(returns, label)
+    ids = list(series.keys())
+    min_len = min((len(series[i]) for i in ids), default=0)
+    R = np.column_stack([series[i][-min_len:] for i in ids]) if ids else np.zeros((0, 0))
     return ids, R
 
 
@@ -31,7 +53,8 @@ def _subset(returns: Mapping[str, Sequence[float]], keep: List[str]) -> Dict[str
 @frame_friendly
 def drop_zero_variance(returns, *, tol: float = 1e-12) -> Dict[str, list]:
     """Drop assets whose return variance is (near) zero."""
-    keep = [i for i in returns if np.var(np.asarray(returns[i], dtype=float)) > tol]
+    series = _finite_series(returns, "drop_zero_variance")
+    keep = [i for i in returns if np.var(series[i]) > tol]
     return _subset(returns, keep)
 
 
@@ -39,8 +62,9 @@ def drop_zero_variance(returns, *, tol: float = 1e-12) -> Dict[str, list]:
 def select_complete_assets(returns, *, min_obs: int = None) -> Dict[str, list]:  # type: ignore[assignment]
     """Keep only assets with a full (longest common) history — drops names with
     short samples from inception/delisting. If ``min_obs`` is given, keep assets
-    with at least that many observations."""
-    lengths = {i: len(returns[i]) for i in returns}
+    with at least that many observations. Missing or non-finite values (the
+    blanks a DataFrame uses for a late listing) do not count as observations."""
+    lengths = {i: int(np.isfinite(np.asarray(returns[i], dtype=float)).sum()) for i in returns}
     if not lengths:
         return {}
     target = max(lengths.values()) if min_obs is None else min_obs
@@ -55,7 +79,7 @@ def drop_highly_correlated(returns, *, threshold: float = 0.95) -> Dict[str, lis
     Of each offending pair, the asset with the higher mean absolute correlation
     to the rest of the universe is removed (keep the more independent one).
     """
-    ids, R = _matrix(returns)
+    ids, R = _matrix(returns, "drop_highly_correlated")
     if len(ids) < 2:
         return _subset(returns, ids)
     corr = np.corrcoef(R.T)
@@ -93,7 +117,7 @@ def select_k_extremes(returns, *, k: int, measure: str = "sharpe", highest: bool
             ``"volatility"`` (std).
         highest: keep the top-k (True) or bottom-k (False).
     """
-    ids, R = _matrix(returns)
+    ids, R = _matrix(returns, "select_k_extremes")
     if not ids:
         return {}
     mu = R.mean(axis=0)
@@ -116,7 +140,7 @@ def select_k_extremes(returns, *, k: int, measure: str = "sharpe", highest: bool
 def select_non_dominated(returns, *, risk_measure: str = "volatility") -> Dict[str, list]:
     """Keep the Pareto-efficient assets: no other asset has both a higher mean
     return AND a lower risk. Removes strictly dominated names."""
-    ids, R = _matrix(returns)
+    ids, R = _matrix(returns, "select_non_dominated")
     if len(ids) < 2:
         return _subset(returns, ids)
     ret = R.mean(axis=0)

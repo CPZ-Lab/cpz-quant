@@ -30,7 +30,8 @@ class EntropyPoolingResult:
     prior: np.ndarray                          # (T,) prior probabilities
     effective_number_of_scenarios: float       # exp(entropy(q)); <= T
     relative_entropy: float                     # KL(q || p)
-    converged: bool
+    converged: bool                             # solver success AND every view met
+    max_view_error: float = 0.0                 # largest view miss, in the view's units
 
     def effective_ratio(self) -> float:
         """Effective scenarios as a fraction of the sample (1.0 = undistorted)."""
@@ -53,6 +54,7 @@ def entropy_pooling(
     b_eq: Optional[np.ndarray] = None,
     a_ineq: Optional[np.ndarray] = None,
     b_ineq: Optional[np.ndarray] = None,
+    view_tolerance: float = 1e-6,
 ) -> EntropyPoolingResult:
     """Compute posterior scenario probabilities under views via entropy pooling.
 
@@ -64,6 +66,10 @@ def entropy_pooling(
 
     Each row of ``A``/``G`` is the value of a view statistic across scenarios
     (e.g. asset returns for a mean view; squared deviations for a variance view).
+
+    ``converged`` is True only when the solver succeeds and every view holds to
+    within ``view_tolerance`` times that view's prior dispersion;
+    ``max_view_error`` reports the largest miss in the view's own units.
     """
     if prior is not None:
         T = np.asarray(prior).size
@@ -84,8 +90,18 @@ def entropy_pooling(
         q = p.copy()
         return EntropyPoolingResult(q, p, _eff_scenarios(q), 0.0, True)
 
-    M = np.vstack([A, G]) if (Keq + Kin) else np.zeros((0, T))
-    rhs = np.concatenate([b, h])
+    M_raw = np.vstack([A, G]) if (Keq + Kin) else np.zeros((0, T))
+    rhs_raw = np.concatenate([b, h])
+    if not (np.all(np.isfinite(M_raw)) and np.all(np.isfinite(rhs_raw))):
+        raise ValueError("entropy_pooling: view rows and targets must be finite")
+    # Precondition: express each view in units of its own prior dispersion so
+    # the dual is well scaled. Views on small daily returns otherwise leave
+    # the dual gradient below the solver's tolerance while the view is still
+    # missed by several percent.
+    scale = np.sqrt(np.maximum(((M_raw - rhs_raw[:, None]) ** 2) @ p, 0.0))
+    scale[scale == 0] = 1.0
+    M = (M_raw - rhs_raw[:, None]) / scale[:, None]
+    rhs = np.zeros(Keq + Kin)
 
     # Posterior q_i ∝ p_i exp(-(M_i·λ)); with this sign, λ_j >= 0 on an
     # inequality row enforces (M q)_j <= rhs_j (Meucci's standard form).
@@ -109,10 +125,15 @@ def entropy_pooling(
     bounds = [(None, None)] * Keq + [(0.0, None)] * Kin
     x0 = np.zeros(Keq + Kin)
     res = sp_opt.minimize(dual, x0, jac=dual_grad, method="L-BFGS-B", bounds=bounds,
-                          options={"maxiter": 1000, "ftol": 1e-12})
+                          options={"maxiter": 10_000, "ftol": 1e-15, "gtol": 1e-12})
     q = q_of(res.x)
     kl = float(np.sum(q * (np.log(np.clip(q, EPSILON, None)) - log_p)))
-    return EntropyPoolingResult(q, p, _eff_scenarios(q), kl, bool(res.success))
+    # Verify the views in their own units; a solver "success" is not enough.
+    misses = M_raw @ q - rhs_raw
+    misses[Keq:] = np.maximum(misses[Keq:], 0.0)
+    met = bool(np.all(np.abs(misses) <= view_tolerance * scale))
+    return EntropyPoolingResult(q, p, _eff_scenarios(q), kl, bool(res.success) and met,
+                                float(np.max(np.abs(misses))))
 
 
 def _eff_scenarios(q: np.ndarray) -> float:
