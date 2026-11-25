@@ -145,11 +145,13 @@ class CostModel:
         return self.breakdown(notional, adv, volatility).total_cost_bps
 
 
-def _require_liquidity(adv: float, volatility: Optional[float] = None, *, model: str) -> None:
+def _require_liquidity(
+    adv: float, volatility: Optional[float] = None, *, model: str, needs_volatility: bool = False,
+) -> None:
     """Impact needs the name's ADV (and, for vol-scaled models, its volatility)."""
-    if not (adv == adv and adv > 0):  # also rejects NaN
+    if adv is None or not (adv == adv and adv > 0):  # also rejects NaN
         raise ValueError(f"{model} impact needs the average daily volume (adv > 0), got {adv}")
-    if volatility is not None and not (volatility == volatility and volatility > 0):
+    if needs_volatility and (volatility is None or not (volatility == volatility and volatility > 0)):
         raise ValueError(
             f"{model} impact needs the asset's daily volatility (> 0), got {volatility}"
         )
@@ -181,7 +183,7 @@ def almgren_chriss(
         beta: Temporary impact exponent.
         participation_rate: Fraction of ADV consumed per time unit.
     """
-    _require_liquidity(adv, volatility, model="Almgren-Chriss")
+    _require_liquidity(adv, volatility, model="Almgren-Chriss", needs_volatility=True)
     q_over_v = abs(notional) / adv  # a sell moves the price as much as a buy
     perm = gamma * volatility * (q_over_v ** alpha) * 10000.0
 
@@ -241,7 +243,7 @@ def sqrt_impact(
             missing volatility used to become 1.0 (100% a day), which made
             the impact about 50 times too large for a typical stock.
     """
-    _require_liquidity(adv, volatility, model="square-root")
+    _require_liquidity(adv, volatility, model="square-root", needs_volatility=True)
     return coefficient * float(volatility) * ((abs(notional) / adv) ** exponent) * 10000.0  # type: ignore[arg-type]
 
 

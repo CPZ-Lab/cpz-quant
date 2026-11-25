@@ -440,3 +440,31 @@ def test_review_sma_matches_a_plain_window_mean_with_gaps():
         w = x[t - 29 : t + 1]
         ref[t] = w.mean() if np.isfinite(w).all() else np.nan
     np.testing.assert_allclose(ours, ref, rtol=1e-12, atol=1e-12)
+
+
+@pytest.mark.parametrize("name, col, call, at", [
+    ("cmo", "close", lambda b: ind.cmo(b, 14, series=True), K + 1),
+    ("cmf_volume", "volume", lambda b: ind.cmf(b, 20, series=True), K + 1),
+    ("cmf_high", "high", lambda b: ind.cmf(b, 20, series=True), K + 1),
+    ("aroon_osc", "high", lambda b: ind.aroon_osc(b, 14, series=True), K + 1),
+    ("aroon_up", "high", lambda b: ind.aroon(b, 14, series=True)[1], K + 1),
+    ("aroon_down", "low", lambda b: ind.aroon(b, 14, series=True)[0], K + 1),
+    ("nvi", "volume", lambda b: ind.nvi(b, series=True), K + 1),
+    ("pvi", "close", lambda b: ind.pvi(b, series=True), K + 1),
+])
+def test_review_more_indicators_keep_a_gap_nan(bars, name, col, call, at):
+    clean = call(bars).to_numpy()
+    gapped = call(_gap_bars(bars, col, K)).to_numpy()
+    assert np.isfinite(clean[at])
+    assert np.isnan(gapped[at]), f"{name} turned a missing bar into {gapped[at]}"
+
+
+def test_review_rolling_corr_and_beta_keep_a_gap_nan(ohlcv):
+    r = np.diff(ohlcv["close"]) / ohlcv["close"][:-1]
+    b = np.roll(r, 1)
+    r_gap = r.copy()
+    r_gap[K] = np.nan
+    assert np.isfinite(ind.rolling_corr(r, b, 20, series=True).to_numpy()[K + 1])
+    assert np.isnan(ind.rolling_corr(r_gap, b, 20, series=True).to_numpy()[K + 1])
+    assert np.isnan(ind.rolling_beta(r_gap, b, 20, series=True).to_numpy()[K + 1])
+    assert np.isnan(ind.rolling_beta(b, r_gap, 20, series=True).to_numpy()[K + 1])

@@ -578,6 +578,9 @@ def aroon_series(
     since_low = np.argmin(lw[:, ::-1], axis=1)
     up[period:] = 100.0 * (period - since_high) / period
     down[period:] = 100.0 * (period - since_low) / period
+    # argmax/argmin take a NaN as the extreme: a window with a missing bar is NaN.
+    up[period:][np.isnan(hw).any(axis=1)] = np.nan
+    down[period:][np.isnan(lw).any(axis=1)] = np.nan
     return down, up
 
 

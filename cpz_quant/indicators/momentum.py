@@ -430,8 +430,9 @@ def cmo_series(close: np.ndarray, period: int = 14, *, smoothing: str = "sum") -
     if n < period + 1:
         return out
     delta = np.diff(close)
-    gains = np.where(delta > 0, delta, 0.0)
-    losses = np.where(delta < 0, -delta, 0.0)
+    # A missing close is a missing change, not a flat bar: keep it NaN.
+    gains = np.where(np.isnan(delta), np.nan, np.maximum(delta, 0.0))
+    losses = np.where(np.isnan(delta), np.nan, np.maximum(-delta, 0.0))
     if smoothing == "sum":
         up = rolling_apply(gains, period, "sum")
         down = rolling_apply(losses, period, "sum")

@@ -85,15 +85,14 @@ def cmf_series(
             ((close - low) - (high - close)) / hl_range,
             0.0,
         )
+    # A missing high, low or close leaves the bar's flow unknown (NaN), not 0.
+    mf_multiplier[np.isnan(hl_range) | np.isnan(close)] = np.nan
     mfv = mf_multiplier * volume
 
     out = np.full(n, np.nan)
     for i in range(period - 1, n):
         vol_sum = np.sum(volume[i - period + 1 : i + 1])
-        if vol_sum > EPSILON:
-            out[i] = np.sum(mfv[i - period + 1 : i + 1]) / vol_sum
-        else:
-            out[i] = 0.0
+        out[i] = ratio(np.sum(mfv[i - period + 1 : i + 1]), vol_sum, 0.0)
     return out
 
 
@@ -296,6 +295,11 @@ def _volume_index(
         return out
     out[0] = initial
     for i in range(1, n):
+        if np.isnan(close[i]) or np.isnan(close[i - 1]) or np.isnan(volume[i]) \
+                or np.isnan(volume[i - 1]):
+            # Whether the bar counts is unknown: the index is NaN from here on.
+            out[i] = np.nan
+            continue
         moved = volume[i] > volume[i - 1] if positive else volume[i] < volume[i - 1]
         if moved and abs(close[i - 1]) > EPSILON:
             out[i] = out[i - 1] * close[i] / close[i - 1]

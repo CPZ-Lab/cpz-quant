@@ -15,12 +15,14 @@ All notable changes to cpz-quant are documented here. The format follows [Keep a
   window. Callers that read `ind.atr(...)` as a size input get NaN on data
   with one null high: cpz-ai (cpz-py) `atr_size` needs an `isfinite` guard.
 - A NaN inside a window gives NaN in CCI, z-scores, ROC, momentum, STC, MFI,
-  Williams %R, stochastic, Fisher, ADX and the regression R-squared (they
-  used to read 0, 50, -50 or 0.5). Flat prices give NaN in RSI, MFI, the
+  Williams %R, stochastic, Fisher, ADX, CMO, CMF, Aroon, rolling correlation
+  and beta, and the regression R-squared (they used to read 0, 50, -50, 0.5
+  or another finite value); NVI and PVI stay NaN after a missing bar. Flat prices give NaN in RSI, MFI, the
   Ultimate Oscillator, fast stochastic and Williams %R.
 - `certify` raises when `max_drawdown` looks like a fraction: a magnitude of
   1 or less without `analytics=` confirming it, or a value equal to
-  `analytics.max_drawdown` (including -1.0 for a wipe-out).
+  `analytics.max_drawdown` (including -1.0 for a wipe-out). With
+  `analytics=` it also raises when the two drawdowns contradict each other.
 - `turnover_analysis.estimated_cost_bps` is 30 to 100 times smaller for
   partial rebalances (it is now bps of the book). Without a cost model the
   cost fields are `None`. With one, a traded symbol without ADV, or without

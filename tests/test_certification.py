@@ -105,8 +105,11 @@ class TestGrade:
     def test_analytics_tail_penalty_lowers_risk(self):
         # A fat-tailed, weak-downside analytics block should not raise the grade.
         thin = compute_risk_analytics(_equity([0.001, -0.05] * 200))  # jagged, negative skew-ish
-        base = certify(backtest_verified=True, metrics=CertMetrics(sharpe_ratio=0.5, max_drawdown=-25, profit_factor=1.1), rigor=STRONG_RIGOR)
-        withA = certify(backtest_verified=True, metrics=CertMetrics(sharpe_ratio=0.5, max_drawdown=-25, profit_factor=1.1), rigor=STRONG_RIGOR, analytics=thin)
+        # Same drawdown on both sides (in percent), so only the analytics differ;
+        # certify refuses a metrics drawdown that contradicts the analytics.
+        dd_pct = thin.max_drawdown * 100
+        base = certify(backtest_verified=True, metrics=CertMetrics(sharpe_ratio=0.5, max_drawdown=dd_pct, profit_factor=1.1), rigor=STRONG_RIGOR)
+        withA = certify(backtest_verified=True, metrics=CertMetrics(sharpe_ratio=0.5, max_drawdown=dd_pct, profit_factor=1.1), rigor=STRONG_RIGOR, analytics=thin)
         risk_base = next(d.score for d in base.dimensions if d.key == "risk")
         risk_a = next(d.score for d in withA.dimensions if d.key == "risk")
         assert risk_a <= risk_base + 5  # analytics never inflate beyond the small bonus

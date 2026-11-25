@@ -66,7 +66,9 @@ def rolling_corr_series(
         b = series_b[i - period + 1 : i + 1]
         std_a = np.std(a, ddof=1)
         std_b = np.std(b, ddof=1)
-        if std_a > EPSILON and std_b > EPSILON:
+        if np.isnan(std_a) or np.isnan(std_b):
+            out[i] = np.nan  # a missing value in the window
+        elif std_a > EPSILON and std_b > EPSILON:
             out[i] = np.corrcoef(a, b)[0, 1]
         else:
             out[i] = 0.0
@@ -93,7 +95,9 @@ def rolling_beta_series(
         y = asset_returns[i - period + 1 : i + 1]
         x = benchmark_returns[i - period + 1 : i + 1]
         var_x = np.var(x, ddof=1)
-        if var_x > EPSILON:
+        if np.isnan(var_x) or np.isnan(y).any():
+            out[i] = np.nan  # a missing value in the window
+        elif var_x > EPSILON:
             cov_xy = np.cov(x, y, ddof=1)[0, 1]
             out[i] = cov_xy / var_x
         else:

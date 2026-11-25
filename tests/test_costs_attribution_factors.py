@@ -23,6 +23,7 @@ from cpz_quant.portfolio import (
     hierarchical_risk_parity,
     risk_attribution,
     rolling_attribution,
+    sqrt_impact,
     total_cost,
     turnover_analysis,
 )
@@ -84,6 +85,8 @@ def test_3045_square_root_impact_needs_a_real_volatility():
     # sigma used to become 1.0 (100% a day): 163 bps instead of 8.16 for this trade.
     with pytest.raises(ValueError, match="volatility"):
         CostModel(spread_bps=8, commission_bps=1).estimate(2e6, 80e6)
+    with pytest.raises(ValueError, match="volatility"):
+        sqrt_impact(2e6, 80e6)  # volatility omitted: a clear ValueError, not a TypeError
     with pytest.raises(ValueError, match="adv"):
         CostModel().estimate(2e6, 0.0, 0.02)
     with pytest.raises(ValueError, match="volatility"):

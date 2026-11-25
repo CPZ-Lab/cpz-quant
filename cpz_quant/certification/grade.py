@@ -129,8 +129,13 @@ def _drawdown_pct(metrics: Optional[CertMetrics], analytics: Optional[RiskAnalyt
     - With *analytics*, a value that matches ``analytics.max_drawdown`` as a
       fraction rather than as a percent raises, whatever its size (``-1.0``
       for a wipe-out would otherwise read as 1%).
+    - With *analytics*, a value that contradicts ``analytics.max_drawdown *
+      100`` (beyond 10% relative and half a point) raises: the two describe
+      the same backtest.
     - A magnitude of 1 or less is accepted only when the analytics confirm
-      it as a percent; without them it raises.
+      it as a percent; without them it raises. (Without analytics a
+      magnitude above 1 cannot be told apart from a percent and is read as
+      one.)
     """
     dd = _finite(metrics.max_drawdown) if metrics else None
     if dd is None:
@@ -145,6 +150,11 @@ def _drawdown_pct(metrics: Optional[CertMetrics], analytics: Optional[RiskAnalyt
             f"metrics.max_drawdown={dd} equals analytics.max_drawdown ({a_dd}), which is a "
             f"fraction, so it would be read as a {abs_dd:.2f}% drawdown. It is in percent: pass "
             f"{a_dd * 100:.4g} (analytics.max_drawdown * 100)."
+        )
+    if a_dd is not None and not math.isclose(abs(a_dd) * 100, abs_dd, rel_tol=0.10, abs_tol=0.5):
+        raise ValueError(
+            f"metrics.max_drawdown={dd} (percent) contradicts analytics.max_drawdown={a_dd} "
+            f"({abs(a_dd) * 100:.2f}%); they should describe the same backtest."
         )
     if 0 < abs_dd <= 1 and not as_pct:
         raise ValueError(

@@ -219,6 +219,17 @@ def test_3177_fraction_matching_analytics_is_refused_at_any_size():
                 metrics=CertMetrics(sharpe_ratio=1.2, max_drawdown=a.max_drawdown))
 
 
+def test_3177_metrics_contradicting_analytics_is_refused():
+    eq = _equity(np.r_[np.full(100, 0.001), np.full(10, -0.08), np.full(100, 0.001)])
+    a = compute_risk_analytics(eq)  # about a 57% drawdown
+    with pytest.raises(ValueError, match="contradicts"):
+        certify(backtest_verified=True, rigor=_rig(), analytics=a,
+                metrics=CertMetrics(sharpe_ratio=1.2, max_drawdown=-15.0))
+    ok = certify(backtest_verified=True, rigor=_rig(), analytics=a,
+                 metrics=CertMetrics(sharpe_ratio=1.2, max_drawdown=round(a.max_drawdown * 100, 1)))
+    assert ok.grade
+
+
 def test_3177_fractional_drawdown_is_refused():
     with pytest.raises(ValueError, match="percent"):
         certify(backtest_verified=True, rigor=_rig(),
