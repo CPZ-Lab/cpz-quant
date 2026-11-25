@@ -278,7 +278,6 @@ def grid_search(
         param_grid: ``{param: [values]}``.
         scorer: maps a :class:`CVResult` to a scalar to maximize (default OOS Sharpe).
     """
-    returns = as_returns(returns)
     keys = list(param_grid.keys())
     best = None
     results = []
