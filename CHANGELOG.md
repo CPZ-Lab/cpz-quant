@@ -4,6 +4,13 @@ All notable changes to cpz-quant are documented here. The format follows [Keep a
 
 ## [Unreleased]
 
+- `portfolio.model_selection.grid_search` never selects a setting whose score
+  is not a finite number (None, NaN or inf). An unscored first setting used to
+  stay "best" for the whole search because NaN compares False against every
+  score. Unscored settings stay in `results`; when no setting has a finite
+  score, or the grid is empty, it raises `ValueError` instead of returning a
+  blank best or a score of 0.0.
+
 ## [1.2.0] - 2026-09-17
 
 - Expand `cpz_quant.indicators` from 32 to 91 indicator functions and add all

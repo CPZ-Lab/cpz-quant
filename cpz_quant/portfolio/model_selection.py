@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from itertools import combinations, product
-from math import comb
+from math import comb, isfinite
 from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
@@ -273,6 +273,13 @@ def grid_search(
             ``train_returns -> weights``).
         param_grid: ``{param: [values]}``.
         scorer: maps a :class:`CVResult` to a scalar to maximize (default OOS Sharpe).
+
+    A setting whose score is not a finite number (``None``, NaN, inf: the
+    scorer could not score it) stays in ``results`` with that score and is
+    never selected, wherever it sits in the grid.
+
+    Raises:
+        ValueError: the grid is empty, or no setting has a finite score.
     """
     keys = list(param_grid.keys())
     best = None
@@ -282,7 +289,24 @@ def grid_search(
         cvres = cross_validate(allocator_factory(**params), returns, cv)
         score = scorer(cvres)
         results.append({"params": params, "score": score, "oos_sharpe": cvres.oos_sharpe})
-        if best is None or score > best[1]:
-            best = (params, score)
-    return GridSearchResult(best_params=best[0] if best else {},
-                            best_score=best[1] if best else 0.0, results=results)
+        # NaN compares False against everything, so an unscored first
+        # setting used to stay "best" for the whole search.
+        if not _finite_score(score):
+            continue
+        if best is None or float(score) > best[1]:
+            best = (params, float(score))
+    if not results:
+        raise ValueError("grid_search: param_grid has no settings to evaluate")
+    if best is None:
+        raise ValueError(
+            f"grid_search: none of the {len(results)} settings has a finite score; "
+            "the scorer returned None/NaN/inf for every one"
+        )
+    return GridSearchResult(best_params=best[0], best_score=best[1], results=results)
+
+
+def _finite_score(score) -> bool:
+    try:
+        return score is not None and isfinite(float(score))
+    except (TypeError, ValueError):
+        return False
