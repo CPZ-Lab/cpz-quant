@@ -82,17 +82,32 @@ pub struct Analytics {
     pub crisis_benchmark_return: Option<f64>,
 }
 
+/// Per-period geometric mean return; -1 once the compounded value is gone.
+fn geometric_mean(rets: &[f64]) -> f64 {
+    let growth: f64 = rets.iter().map(|r| 1.0 + r).product();
+    if growth > 0.0 {
+        growth.powf(1.0 / rets.len() as f64) - 1.0
+    } else {
+        -1.0
+    }
+}
+
 /// Pure-Rust computation, unit-testable without Python.
 pub fn compute(equity: &[f64], benchmark: Option<&[f64]>) -> Option<Analytics> {
-    // Joint clean: keep indices where the portfolio value is finite and > 0.
+    // Joint clean: keep indices where the portfolio value is finite. A value
+    // at or below zero is a wiped-out account: the curve ends there and the
+    // loss counts (mirrors `_until_wipeout` in the Python layer).
     let mut eq: Vec<f64> = Vec::with_capacity(equity.len());
     let mut bench: Vec<f64> = Vec::new();
     let has_bench = benchmark.map_or(false, |b| b.len() == equity.len());
     for (i, &p) in equity.iter().enumerate() {
-        if p.is_finite() && p > 0.0 {
+        if p.is_finite() {
             eq.push(p);
             if has_bench {
                 bench.push(benchmark.unwrap()[i]);
+            }
+            if p <= 0.0 {
+                break;
             }
         }
     }
@@ -107,7 +122,12 @@ pub fn compute(equity: &[f64], benchmark: Option<&[f64]>) -> Option<Analytics> {
 
     let mu = mean(&rets);
     let sd = std_dev(&rets, mu);
-    let ann_return = (eq[eq.len() - 1] / eq[0]).powf(TRADING_DAYS / n as f64) - 1.0;
+    let last = eq[eq.len() - 1];
+    let ann_return = if last > 0.0 {
+        (last / eq[0]).powf(TRADING_DAYS / n as f64) - 1.0
+    } else {
+        -1.0
+    };
     let ann_vol = sd * TRADING_DAYS.sqrt();
     let sharpe = if sd > 0.0 { Some(mu / sd * TRADING_DAYS.sqrt()) } else { None };
 
@@ -128,11 +148,14 @@ pub fn compute(equity: &[f64], benchmark: Option<&[f64]>) -> Option<Analytics> {
         if e > peak {
             peak = e;
             cur_uw = 0;
-        } else {
+        } else if e < peak {
             cur_uw += 1;
             if cur_uw > max_uw {
                 max_uw = cur_uw;
             }
+        } else {
+            // Flat at the high-water mark: not under water.
+            cur_uw = 0;
         }
         let dd = if peak > 0.0 { e / peak - 1.0 } else { 0.0 };
         if dd < max_dd {
@@ -200,24 +223,29 @@ pub fn compute(equity: &[f64], benchmark: Option<&[f64]>) -> Option<Analytics> {
                 correlation = Some(cov / (sd * b_sd));
             }
 
-            let (mut s_up, mut b_up, mut s_dn, mut b_dn) = (1.0, 1.0, 1.0, 1.0);
-            let (mut n_up, mut n_dn) = (0, 0);
+            // Morningstar capture: geometric mean per period over the
+            // benchmark's up (down) periods.
+            let (mut s_up, mut b_up, mut s_dn, mut b_dn) = (vec![], vec![], vec![], vec![]);
             for i in 0..n {
                 if b_rets[i] > 0.0 {
-                    s_up *= 1.0 + rets[i];
-                    b_up *= 1.0 + b_rets[i];
-                    n_up += 1;
+                    s_up.push(rets[i]);
+                    b_up.push(b_rets[i]);
                 } else if b_rets[i] < 0.0 {
-                    s_dn *= 1.0 + rets[i];
-                    b_dn *= 1.0 + b_rets[i];
-                    n_dn += 1;
+                    s_dn.push(rets[i]);
+                    b_dn.push(b_rets[i]);
                 }
             }
-            if n_up > 0 && b_up != 1.0 {
-                up_capture = Some((s_up - 1.0) / (b_up - 1.0));
+            if !b_up.is_empty() {
+                let b_g = geometric_mean(&b_up);
+                if b_g != 0.0 {
+                    up_capture = Some(geometric_mean(&s_up) / b_g);
+                }
             }
-            if n_dn > 0 && b_dn != 1.0 {
-                down_capture = Some((s_dn - 1.0) / (b_dn - 1.0));
+            if !b_dn.is_empty() {
+                let b_g = geometric_mean(&b_dn);
+                if b_g != 0.0 {
+                    down_capture = Some(geometric_mean(&s_dn) / b_g);
+                }
             }
 
             // Crisis window = benchmark's deepest peak-to-trough drawdown.
@@ -377,5 +405,32 @@ mod tests {
         assert!(a.crisis_benchmark_return.unwrap() < -0.15);
         assert!(a.crisis_return.unwrap() > a.crisis_benchmark_return.unwrap());
         assert!(a.down_capture.unwrap() < 0.5);
+    }
+
+    #[test]
+    fn flat_at_a_new_high_is_not_under_water() {
+        // 200 flat days at the starting value, then a 2-day dip and recovery.
+        let mut rets = vec![0.0; 200];
+        rets.extend([-0.01, -0.01, 0.03, 0.001]);
+        let a = compute(&equity_from_returns(&rets), None).unwrap();
+        assert_eq!(a.max_time_under_water_days, Some(2));
+    }
+
+    #[test]
+    fn leveraged_twin_captures_twice_per_period() {
+        let b_rets: Vec<f64> = (0..400).map(|i| 0.0003 + 0.01 * ((i as f64) / 3.0).sin()).collect();
+        let s_rets: Vec<f64> = b_rets.iter().map(|r| 2.0 * r).collect();
+        let a = compute(&equity_from_returns(&s_rets), Some(&equity_from_returns(&b_rets))).unwrap();
+        assert!((a.up_capture.unwrap() - 2.0).abs() < 0.05);
+        assert!((a.down_capture.unwrap() - 2.0).abs() < 0.05);
+    }
+
+    #[test]
+    fn wiped_out_curve_reports_total_loss() {
+        let mut eq = equity_from_returns(&vec![0.001; 60]);
+        eq.extend(vec![0.0; 15]);
+        let a = compute(&eq, None).unwrap();
+        assert_eq!(a.max_drawdown, Some(-1.0));
+        assert_eq!(a.annualized_return, Some(-1.0));
     }
 }

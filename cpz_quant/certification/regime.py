@@ -9,6 +9,12 @@ single-regime artifact.
 Regimes are derived from the series itself (rolling realized volatility and a
 benchmark trend filter), so no external macro dataset is required; the analysis
 is self-contained and reproducible.
+
+Each day's regime is set from data known before that day's return: the
+volatility of the preceding ``vol_window`` returns, and the benchmark's
+previous close against its moving average ending there. Labelling a day with
+its own close or its own return sorts up days into "bull" and big moves into
+"stressed", so even a random walk looks regime dependent.
 """
 
 from __future__ import annotations
@@ -97,13 +103,13 @@ def regime_conditional_performance(
     if n < 30:
         return None
 
-    # ── Volatility regimes: rolling realized vol -> terciles ──────────────────
+    # ── Volatility regimes: trailing realized vol -> terciles ─────────────────
+    # Return i is labelled by the vol of the vol_window returns before it.
+    if vol_window < 2:
+        raise ValueError("vol_window must be >= 2")
     roll_vol = np.full(n, np.nan)
-    for i in range(n):
-        lo = max(0, i - vol_window + 1)
-        w = rets[lo : i + 1]
-        if w.size >= 2:
-            roll_vol[i] = w.std(ddof=1)
+    for i in range(vol_window, n):
+        roll_vol[i] = rets[i - vol_window : i].std(ddof=1)
     valid = np.isfinite(roll_vol)
     breakdown = RegimeBreakdown()
     if valid.sum() >= 30:
@@ -129,12 +135,14 @@ def regime_conditional_performance(
         bench = np.asarray(benchmark, dtype=float)
         bench = bench[np.isfinite(np.asarray(equity, dtype=float)) & (np.asarray(equity, dtype=float) > 0)]
         if bench.size == eq.size and np.all(bench > 0):
-            # Align a trend flag to each return day (index i corresponds to eq[i+1]).
+            # Return day i (eq[i] / eq[i-1]) is bull when the benchmark's close at
+            # i-1 is at or above its moving average ending at i-1: both known
+            # before day i trades.
             bull_mask = []
             for i in range(1, eq.size):
-                lo = max(0, i - trend_window + 1)
-                ma = bench[lo : i + 1].mean()
-                bull_mask.append(bench[i] >= ma)
+                lo = max(0, i - trend_window)
+                ma = bench[lo:i].mean()
+                bull_mask.append(bench[i - 1] >= ma)
             bull_mask = np.asarray(bull_mask, dtype=bool)  # type: ignore[assignment]
             if bull_mask.size == n:  # type: ignore[attr-defined]
                 breakdown.trend_regimes = [

@@ -5,14 +5,23 @@ v1.1.0): six weighted dimensions, minimum gates, provisional-vs-full, grade
 bands, and the tail-risk-aware Risk score. Same thresholds → same grade, so the
 SDK, the backtest engine, and the edge all agree.
 
-Fail closed: absent inputs push scores down, never up; a strategy with no
-rigorous, verified backtest cannot be certified.
+Fail closed: absent inputs push scores down, never up (a missing beta or
+capacity scores the same as the worst measured value, never better); a
+strategy with no rigorous, verified backtest cannot be certified. Numeric
+inputs may be Python or NumPy numbers and flags Python or NumPy booleans.
+
+Units: ``CertMetrics.max_drawdown`` is in percent (``-62.0`` for a 62%
+drawdown), while :class:`RiskAnalytics` reports fractions (``-0.62``).
 """
 
 from __future__ import annotations
 
+import math
+import numbers
 from dataclasses import dataclass
 from typing import List, Optional
+
+import numpy as np
 
 from .analytics import RiskAnalytics
 
@@ -35,6 +44,8 @@ Grade = str  # 'A+' | 'A' | 'B' | 'C' | 'D' | 'Not Certified'
 
 @dataclass
 class CertMetrics:
+    """Backtest metrics. ``max_drawdown`` is in percent (sign ignored):
+    pass ``-62.0`` for a 62% drawdown, i.e. ``RiskAnalytics.max_drawdown * 100``."""
     sharpe_ratio: Optional[float] = None
     max_drawdown: Optional[float] = None
     volatility: Optional[float] = None
@@ -97,7 +108,44 @@ class CertificationResult:
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 def _finite(v) -> Optional[float]:
-    return float(v) if isinstance(v, (int, float)) and v == v and v not in (float("inf"), float("-inf")) else None
+    """A finite real number (Python or NumPy, any width) as float, else None."""
+    if isinstance(v, numbers.Real) and not isinstance(v, (bool, np.bool_)):
+        f = float(v)
+        return f if math.isfinite(f) else None
+    return None
+
+
+def _flag(v) -> Optional[bool]:
+    """A Python or NumPy boolean as bool; anything else is not a flag (None)."""
+    return bool(v) if isinstance(v, (bool, np.bool_)) else None
+
+
+def _drawdown_pct(metrics: Optional[CertMetrics], analytics: Optional[RiskAnalytics]) -> Optional[float]:
+    """``|max_drawdown|`` in percent, refusing a value that is evidently a fraction.
+
+    ``CertMetrics.max_drawdown`` is in percent. A magnitude below 1 is read as
+    under 1%, which a fraction from :func:`compute_risk_analytics` (``-0.62``
+    for 62%) would silently become. Such a value is accepted only when the
+    supplied analytics confirm it; otherwise it raises ``ValueError``.
+    """
+    dd = _finite(metrics.max_drawdown) if metrics else None
+    if dd is None:
+        return None
+    abs_dd = abs(dd)
+    if 0 < abs_dd < 1:
+        a_dd = _finite(analytics.max_drawdown) if analytics is not None else None
+        confirmed = a_dd is not None and math.isclose(abs(a_dd) * 100, abs_dd, rel_tol=0.05, abs_tol=0.01)
+        if not confirmed:
+            hint = ""
+            if a_dd is not None and math.isclose(abs(a_dd), abs_dd, rel_tol=0.05, abs_tol=1e-4):
+                hint = f" It matches analytics.max_drawdown ({a_dd}), a fraction."
+            raise ValueError(
+                f"metrics.max_drawdown={dd} would be read as a {abs_dd:.2f}% drawdown. It is in "
+                "percent (-62.0 for a 62% drawdown); compute_risk_analytics() reports a fraction, "
+                f"so multiply it by 100.{hint} To certify a drawdown under 1%, pass analytics= so "
+                "the value can be confirmed."
+            )
+    return abs_dd
 
 
 def _clamp(v: float, lo: float, hi: float) -> float:
@@ -144,10 +192,9 @@ def score_out_of_sample(rigor: Optional[CertRigor], in_sample_sharpe: Optional[f
 
 
 def score_risk(metrics: Optional[CertMetrics], analytics: Optional[RiskAnalytics] = None) -> tuple[float, str]:
-    dd = _finite(metrics.max_drawdown) if metrics else None
-    if dd is None:
+    abs_dd = _drawdown_pct(metrics, analytics)
+    if abs_dd is None:
         return 0.0, "No max drawdown recorded. Cannot assess loss control."
-    abs_dd = abs(dd)
     score = _band(100 - abs_dd, [(90, 100), (80, 80), (70, 60), (60, 40), (45, 20)], 5)
     pf = _finite(metrics.profit_factor) if metrics else None
     if pf is not None:
@@ -181,12 +228,10 @@ def score_factor_independence(metrics: Optional[CertMetrics]) -> tuple[float, st
     beta = _finite(metrics.beta) if metrics else None
     alpha = _finite(metrics.alpha) if metrics else None
     if beta is None:
-        score = 50.0
-        if alpha is not None and alpha > 0:
-            score = 60.0
-        if alpha is not None and alpha < 0:
-            score = 40.0
-        return score, "Beta to benchmark unavailable; independence cannot be fully attested."
+        # Fail closed: the floor of the beta bands (as for |beta| >= 0.8), so
+        # leaving beta out can never score above a measured beta.
+        return 20.0, ("Beta to benchmark unavailable; independence cannot be attested "
+                      "(scored as the lowest band).")
     abs_beta = abs(beta)
     score = _band(1 - abs_beta, [(0.8, 100), (0.6, 80), (0.4, 60), (0.2, 40)], 20)
     if alpha is not None:
@@ -200,8 +245,9 @@ def score_factor_independence(metrics: Optional[CertMetrics]) -> tuple[float, st
 def score_capacity_cost(rigor: Optional[CertRigor]) -> tuple[float, str]:
     cap = _finite(rigor.capacity) if rigor else None
     if cap is None:
-        score = 40.0
-        detail = "Capacity not estimated by the cost model."
+        # Fail closed: the floor of the capacity bands (as for under $50,000).
+        score = 10.0
+        detail = "Capacity not estimated by the cost model (scored as the lowest band)."
     else:
         score = _band(cap, [(50_000_000, 100), (10_000_000, 85), (1_000_000, 65), (250_000, 45), (50_000, 25)], 10)
         detail = f"Estimated capacity ${round(cap):,}."
@@ -235,11 +281,15 @@ def evaluate_gates(
     dsr = _finite(rigor.deflated_sharpe) if rigor else None
     sharpe = _finite(metrics.sharpe_ratio) if metrics else None
     dd = _finite(metrics.max_drawdown) if metrics else None
+    verified = _flag(backtest_verified) is True
+    no_lookahead = _flag(has_high_severity_lookahead) is False
     return [
-        GateResult("backtest_verified", backtest_verified is True,
-                   "Backtest passed every Trust Layer verification check." if backtest_verified else "Backtest is not fully verified."),
-        GateResult("no_high_severity_lookahead", has_high_severity_lookahead is False,
-                   "High-severity lookahead pattern detected." if has_high_severity_lookahead else "No high-severity lookahead patterns."),
+        GateResult("backtest_verified", verified,
+                   "Backtest passed every Trust Layer verification check." if verified else "Backtest is not fully verified."),
+        GateResult("no_high_severity_lookahead", no_lookahead,
+                   "No high-severity lookahead patterns." if no_lookahead
+                   else "Lookahead check result missing." if _flag(has_high_severity_lookahead) is None
+                   else "High-severity lookahead pattern detected."),
         GateResult("deflated_sharpe_positive", dsr is not None and dsr > 0,
                    "No rigorous engine block (deflated Sharpe absent)." if dsr is None else f"Deflated Sharpe {dsr:.2f} {'> 0.' if dsr > 0 else '<= 0.'}"),
         GateResult("core_metrics_present", sharpe is not None and dd is not None,
@@ -270,7 +320,12 @@ def certify(
     live: Optional[CertLive] = None,
     analytics: Optional[RiskAnalytics] = None,
 ) -> CertificationResult:
-    """Grade a strategy against the CPZAI Certification Standard."""
+    """Grade a strategy against the CPZAI Certification Standard.
+
+    Raises:
+        ValueError: ``metrics.max_drawdown`` looks like a fraction (see
+            :class:`CertMetrics`: it is in percent).
+    """
     gates = evaluate_gates(
         backtest_verified=backtest_verified, has_high_severity_lookahead=has_high_severity_lookahead,
         metrics=metrics, rigor=rigor,
