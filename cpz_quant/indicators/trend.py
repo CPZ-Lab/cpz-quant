@@ -26,16 +26,18 @@ from ._helpers import (
 # ── SMA ──────────────────────────────────────────────────────────────
 
 def sma_series(close: np.ndarray, period: int) -> np.ndarray:
-    """Simple Moving Average via cumulative-sum trick (O(n))."""
+    """Simple Moving Average over a trailing window.
+
+    The value at ``t`` is the mean of ``close[t - period + 1 : t + 1]`` and
+    is NaN exactly when that window holds a NaN, the same as pandas
+    ``rolling(period).mean()``. A leading NaN warm-up (an SMA of RSI) only
+    delays the first value; a missing bar only blanks the windows that
+    contain it, so the latest value is never computed from stale data.
+    """
     n = len(close)
-    out = np.full(n, np.nan)
-    if n < period or period < 1:
-        return out
-    cs = np.cumsum(close)
-    out[period - 1] = cs[period - 1] / period
-    if period < n:
-        out[period:] = (cs[period:] - cs[:-period]) / period
-    return out
+    if period < 1:
+        return np.full(n, np.nan)
+    return rolling_apply(np.asarray(close, dtype=np.float64), period, "mean")
 
 
 # ── EMA ──────────────────────────────────────────────────────────────
@@ -46,7 +48,19 @@ def ema_series(
     *,
     alpha: float | None = None,
 ) -> np.ndarray:
-    """Exponential Moving Average.
+    """Exponential Moving Average, seeded with the first valid value.
+
+    ``y[s] = x[s]`` at the first non-NaN input ``s`` and
+    ``y[t] = alpha * x[t] + (1 - alpha) * y[t-1]`` afterwards, so there is
+    no warm-up gap. TA-Lib and TradingView instead seed with the simple
+    mean of the first *period* values and start ``period - 1`` bars later;
+    the two converge as the seed decays (by ``(1 - alpha)^k`` after ``k``
+    bars). The indicators added in 1.2.0 use the TA-Lib seed
+    (``ema_sma_seed``).
+
+    A leading NaN warm-up (an EMA of RSI) is skipped. A NaN after the seed
+    makes that value and every later one NaN: a recursive average cannot
+    be resumed across a missing bar without inventing it.
 
     Args:
         close: Price array.
@@ -57,11 +71,15 @@ def ema_series(
     """
     if alpha is None:
         alpha = 2.0 / (period + 1)
+    close = np.asarray(close, dtype=np.float64)
     n = len(close)
-    out = np.empty(n)
-    out[0] = close[0]
+    out = np.full(n, np.nan)
+    start = first_valid_index(close)
+    if start >= n:
+        return out
+    out[start] = close[start]
     one_minus_alpha = 1.0 - alpha
-    for i in range(1, n):
+    for i in range(start + 1, n):
         out[i] = alpha * close[i] + one_minus_alpha * out[i - 1]
     return out
 
@@ -127,8 +145,15 @@ def kama_series(
         fast_period: Fast smoothing constant period.
         slow_period: Slow smoothing constant period.
     """
+    close = np.asarray(close, dtype=np.float64)
     n = len(close)
     out = np.full(n, np.nan)
+    start = first_valid_index(close)
+    if start > 0:
+        if start < n:
+            out[start:] = kama_series(close[start:], period, fast_period=fast_period,
+                                      slow_period=slow_period)
+        return out
     if n <= period:
         return out
 
@@ -155,7 +180,13 @@ def supertrend_series(
     *,
     multiplier: float = 3.0,
 ) -> np.ndarray:
-    """Supertrend indicator.
+    """Supertrend indicator (pandas-ta ``supertrend`` definition).
+
+    Bands are ``hl2 -/+ multiplier * ATR``. On each bar ``t`` the trend
+    turns up when ``close[t]`` closes above the previous upper band and
+    down when it closes below the previous lower band, so the line switches
+    sides on the bar that crosses, not one bar later. While the trend holds,
+    the active band only ratchets in the trend's favour.
 
     Args:
         high, low, close: OHLC arrays.
@@ -163,41 +194,31 @@ def supertrend_series(
         multiplier: ATR multiplier for upper / lower bands.
 
     Returns:
-        Supertrend line values (same length as input).
+        Supertrend line values (same length as input), NaN during the ATR
+        warm-up.
     """
     from .volatility import atr_series
 
     n = len(close)
     atr_vals = atr_series(high, low, close, period)
     hl2 = (high + low) / 2.0
+    upper = hl2 + multiplier * atr_vals
+    lower = hl2 - multiplier * atr_vals
 
-    upper_band = hl2 + multiplier * atr_vals
-    lower_band = hl2 - multiplier * atr_vals
-
-    supertrend = np.full(n, np.nan)
-    trend_dir = np.ones(n)
-
-    for i in range(period, n):
-        if np.isnan(upper_band[i]) or np.isnan(lower_band[i]):
-            continue
-        if i == period:
-            supertrend[i] = upper_band[i]
-            trend_dir[i] = -1.0
-            continue
-
-        prev = supertrend[i - 1] if not np.isnan(supertrend[i - 1]) else upper_band[i]
-        trend_dir[i] = 1.0 if close[i - 1] > prev else -1.0
-
-        if trend_dir[i] == 1.0:
-            if not np.isnan(lower_band[i - 1]):
-                lower_band[i] = max(lower_band[i], lower_band[i - 1])
-            supertrend[i] = lower_band[i]
+    out = np.full(n, np.nan)
+    direction = 1
+    for i in range(1, n):
+        if close[i] > upper[i - 1]:
+            direction = 1
+        elif close[i] < lower[i - 1]:
+            direction = -1
         else:
-            if not np.isnan(upper_band[i - 1]):
-                upper_band[i] = min(upper_band[i], upper_band[i - 1])
-            supertrend[i] = upper_band[i]
-
-    return supertrend
+            if direction > 0 and lower[i] < lower[i - 1]:
+                lower[i] = lower[i - 1]
+            if direction < 0 and upper[i] > upper[i - 1]:
+                upper[i] = upper[i - 1]
+        out[i] = lower[i] if direction > 0 else upper[i]
+    return out
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -492,13 +513,21 @@ def ichimoku_series(
     The spans are shifted forward by ``displacement - 1`` bars (the
     TradingView and pandas-ta charting convention, which counts the current
     bar as the first of the 26), so the value at index ``t`` only uses data
-    up to ``t - displacement + 1``: no look-ahead. The Chikou span is not
+    up to ``t - displacement + 1``: no look-ahead. ``displacement`` must be
+    at least 1 (1 means no shift); 0 or less would move the spans backward
+    onto future bars and raises ``ValueError``. The Chikou span is not
     returned because it is the close shifted *backward*, which would place
     future prices at past indices.
 
     Returns:
         ``(tenkan_sen, kijun_sen, senkou_span_a, senkou_span_b)``.
     """
+    if displacement < 1:
+        raise ValueError(
+            f"displacement must be >= 1 (1 = no shift), got {displacement}: a smaller value "
+            "shifts the spans backward so each bar would use later highs and lows"
+        )
+
     def mid(period: int) -> np.ndarray:
         return (rolling_apply(high, period, "max") + rolling_apply(low, period, "min")) / 2.0
 

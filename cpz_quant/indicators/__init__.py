@@ -12,20 +12,32 @@ Usage::
     # Full series — for crossover detection, plotting
     rsi_history = rsi(bars, period=14, series=True)
 
-Every function accepts a polars DataFrame (with configurable column names),
-a polars Series, a numpy array, or a plain list. Parameters such as period,
-smoothing method, and source price are always configurable — no hard-coded
-magic numbers.
+Every function accepts a polars or pandas DataFrame (with configurable
+column names), a polars or pandas Series, a 1-D numpy array, or a plain list.
+Parameters such as period, smoothing method, and source price are always
+configurable; there are no hard-coded magic numbers.
+
+The scalar form returns the value at the latest bar. When that value is
+undefined (a missing bar inside the look-back window, or before it for a
+recursive smoother such as EMA, RSI or ATR) it is NaN with a
+``RuntimeWarning``; an older value is never returned in its place. An empty
+input raises ``ValueError`` in the scalar form.
 """
 
 from __future__ import annotations
 
+import importlib
+import inspect
+import types
+import warnings
 from typing import Any, Optional, Tuple, Union
 
 import numpy as np
 import polars as pl
 
-# Re-export constants so users can override globally
+# Re-exported for reference. These are the defaults bound into the function
+# signatures at import; they are not global settings, so reassigning them
+# changes nothing. Pass ``trading_days=`` (or the column names) per call.
 from ._helpers import (  # noqa: F811
     ANNUALIZATION_FACTOR,
     DEFAULT_COL_CLOSE,
@@ -39,8 +51,11 @@ from ._helpers import (  # noqa: F811
     ensure_hlc,
     ensure_ohlc,
     ensure_ohlcv,
+    is_frame,
+    require_frame,
     source_price,
 )
+from ._helpers import _col_to_numpy as _column
 from ._rust_accel import (
     fast_adx,
     fast_atr,
@@ -62,13 +77,34 @@ def _to_output(arr: np.ndarray, bars: Any, series: bool):
 
     Polars Series have no index — the returned series is positional and
     has the same length as *arr*.
+
+    The scalar is the value at the latest bar. It is NaN when the latest bar
+    has no value, with a ``RuntimeWarning`` if earlier bars did: returning
+    the last non-NaN value instead would hand back a number from before a
+    missing bar as if it were current. An empty input has no latest bar and
+    raises ``ValueError``.
     """
     if series:
-        return pl.Series(values=arr.astype(np.float64), dtype=pl.Float64)
+        return pl.Series(values=np.asarray(arr, dtype=np.float64), dtype=pl.Float64)
+    arr = np.asarray(arr, dtype=np.float64)
     if len(arr) == 0:
-        return 0.0
-    val = arr[~np.isnan(arr)]
-    return float(val[-1]) if len(val) > 0 else float("nan")
+        raise ValueError("no bars: the input is empty, so there is no latest value")
+    latest = float(arr[-1])
+    if np.isnan(latest) and not np.all(np.isnan(arr)):
+        warnings.warn(
+            "the latest value is NaN: a missing or undefined input inside the look-back "
+            "window (or anywhere before it, for a recursive smoother such as EMA, RSI or "
+            "ATR) leaves the latest bar without a value. Fill or drop the missing bars; "
+            "earlier values are not returned in its place.",
+            RuntimeWarning,
+            stacklevel=3,
+        )
+    return latest
+
+
+def _all_finite(*arrays: np.ndarray) -> bool:
+    """The Rust kernels assume complete data; NaN input takes the NumPy path."""
+    return all(bool(np.all(np.isfinite(a))) for a in arrays)
 
 
 def _to_tuple_output(arrays: tuple, bars: Any, series: bool):
@@ -102,7 +138,7 @@ def sma(
     """
     close = source_price(bars, source, col_open=col_open, col_high=col_high,
                          col_low=col_low, col_close=col_close) if source != "close" else ensure_array(bars, col_close)
-    rust_result = fast_sma(close.tolist(), period)
+    rust_result = fast_sma(close.tolist(), period) if _all_finite(close) else None
     if rust_result is not None:
         result = np.array(rust_result)
     else:
@@ -125,6 +161,12 @@ def ema(
 ) -> Union[float, "pl.Series"]:
     """Exponential Moving Average.
 
+    Seeded with the first valid price (``ema[0] = close[0]``), so it has no
+    warm-up gap. TA-Lib and TradingView seed with the simple mean of the
+    first *period* prices instead; the two agree once the seed has decayed
+    (it weighs ``(1 - alpha)^k`` after ``k`` bars, about 1% after
+    ``2.3 * (period + 1) / 2`` bars for the default alpha).
+
     Args:
         bars: DataFrame, Series, array, or list of prices.
         period: Look-back window (used to derive alpha when not given).
@@ -135,7 +177,7 @@ def ema(
     """
     close = source_price(bars, source, col_open=col_open, col_high=col_high,
                          col_low=col_low, col_close=col_close) if source != "close" else ensure_array(bars, col_close)
-    if alpha is None:
+    if alpha is None and _all_finite(close):
         rust_result = fast_ema(close.tolist(), period)
         if rust_result is not None:
             return _to_output(np.array(rust_result), bars, series)
@@ -158,7 +200,7 @@ def wma(
     """Weighted Moving Average (linearly increasing weights)."""
     close = source_price(bars, source, col_open=col_open, col_high=col_high,
                          col_low=col_low, col_close=col_close) if source != "close" else ensure_array(bars, col_close)
-    rust_result = fast_wma(close.tolist(), period)
+    rust_result = fast_wma(close.tolist(), period) if _all_finite(close) else None
     if rust_result is not None:
         return _to_output(np.array(rust_result), bars, series)
     from .trend import wma_series
@@ -257,6 +299,10 @@ def rsi(
 ) -> Union[float, "pl.Series"]:
     """Relative Strength Index (0-100).
 
+    NaN where the price has not moved at all over the averaging window
+    (0 gains over 0 losses is undefined; TA-Lib returns 0, an oversold
+    reading). See ``momentum.rsi_series`` for the definition.
+
     Args:
         bars: Price data.
         period: RSI period.
@@ -265,7 +311,7 @@ def rsi(
     """
     close = source_price(bars, source, col_open=col_open, col_high=col_high,
                          col_low=col_low, col_close=col_close) if source != "close" else ensure_array(bars, col_close)
-    if smoothing == "wilder":
+    if smoothing == "wilder" and _all_finite(close):
         rust_result = fast_rsi(close.tolist(), period)
         if rust_result is not None:
             return _to_output(np.array(rust_result), bars, series)
@@ -304,13 +350,21 @@ def macd(
 ) -> MACDResult:
     """Moving Average Convergence Divergence.
 
+    The fast, slow and signal EMAs are seeded with their first valid input
+    (see ``ema``), not with TA-Lib's simple mean of the first *period*
+    values. Early values, including the histogram's sign, can therefore
+    differ from TA-Lib ``MACD`` and from ``apo()`` (TA-Lib seeding) until
+    the seeds have decayed; use a history several times ``slow_period``
+    long when that matters.
+
     Returns:
         ``MACDResult(macd, signal, histogram)`` — each is a scalar or
         ``pl.Series`` depending on *series*.
     """
     close = source_price(bars, source, col_open=col_open, col_high=col_high,
                          col_low=col_low, col_close=col_close) if source != "close" else ensure_array(bars, col_close)
-    rust_result = fast_macd(close.tolist(), fast_period, slow_period, signal_period)
+    rust_result = (fast_macd(close.tolist(), fast_period, slow_period, signal_period)
+                   if _all_finite(close) else None)
     if rust_result is not None:
         m, s, h = rust_result
         arrs = (np.array(m), np.array(s), np.array(h))
@@ -417,7 +471,8 @@ def adx(
 ) -> Union[float, "pl.Series"]:
     """Average Directional Index."""
     high, low, close = ensure_hlc(bars, col_high=col_high, col_low=col_low, col_close=col_close)
-    rust_result = fast_adx(high.tolist(), low.tolist(), close.tolist(), period)
+    rust_result = (fast_adx(high.tolist(), low.tolist(), close.tolist(), period)
+                   if _all_finite(high, low, close) else None)
     if rust_result is not None:
         return _to_output(np.array(rust_result), bars, series)
     from .momentum import adx_series
@@ -435,12 +490,7 @@ def mfi(
     col_volume: str = DEFAULT_COL_VOLUME,
 ) -> Union[float, "pl.Series"]:
     """Money Flow Index (volume-weighted RSI)."""
-    if not isinstance(bars, pl.DataFrame):
-        raise TypeError("mfi() requires a polars DataFrame with OHLCV columns")
-    high = bars[col_high].to_numpy().astype(np.float64)
-    low = bars[col_low].to_numpy().astype(np.float64)
-    close = bars[col_close].to_numpy().astype(np.float64)
-    vol = bars[col_volume].to_numpy().astype(np.float64)
+    high, low, close, vol = _cols(bars, "mfi", col_high, col_low, col_close, col_volume)
     from .momentum import mfi_series
     return _to_output(mfi_series(high, low, close, vol, period), bars, series)
 
@@ -467,7 +517,7 @@ def atr(
         smoothing: ``"wilder"`` (default), ``"ema"``, or ``"sma"``.
     """
     high, low, close = ensure_hlc(bars, col_high=col_high, col_low=col_low, col_close=col_close)
-    if smoothing == "wilder":
+    if smoothing == "wilder" and _all_finite(high, low, close):
         rust_result = fast_atr(high.tolist(), low.tolist(), close.tolist(), period)
         if rust_result is not None:
             return _to_output(np.array(rust_result), bars, series)
@@ -511,7 +561,7 @@ def bollinger(
     """
     close = source_price(bars, source, col_open=col_open, col_high=col_high,
                          col_low=col_low, col_close=col_close) if source != "close" else ensure_array(bars, col_close)
-    if ma_type == "sma":
+    if ma_type == "sma" and _all_finite(close):
         rust_result = fast_bollinger(close.tolist(), period, num_std)
         if rust_result is not None:
             u, m, l = rust_result
@@ -552,10 +602,13 @@ def donchian(
     col_high: str = DEFAULT_COL_HIGH,
     col_low: str = DEFAULT_COL_LOW,
 ) -> Tuple[Any, Any]:
-    """Donchian Channels. Returns ``(upper, lower)``."""
-    if isinstance(bars, pl.DataFrame):
-        high = bars[col_high].to_numpy().astype(np.float64)
-        low = bars[col_low].to_numpy().astype(np.float64)
+    """Donchian Channels. Returns ``(upper, lower)``.
+
+    On a DataFrame the channels use the high and low columns; on a single
+    series both channels use that series.
+    """
+    if is_frame(bars):
+        high, low = _cols(bars, "donchian", col_high, col_low)
     else:
         high = ensure_array(bars)
         low = ensure_array(bars)
@@ -598,7 +651,9 @@ def garman_klass(
 ) -> Union[float, "pl.Series"]:
     """Garman-Klass volatility estimator (OHLC-based, more efficient than close-to-close)."""
     o, h, l, c = ensure_ohlc(bars, col_open=col_open, col_high=col_high, col_low=col_low, col_close=col_close)
-    rust_result = fast_garman_klass(o.tolist(), h.tolist(), l.tolist(), c.tolist(), period)
+    # The Rust kernel always annualises with 252 days: use it only then.
+    rust_result = (fast_garman_klass(o.tolist(), h.tolist(), l.tolist(), c.tolist(), period)
+                   if annualize and trading_days == 252 and _all_finite(o, h, l, c) else None)
     if rust_result is not None:
         return _to_output(np.array(rust_result), bars, series)
     from .volatility import garman_klass_series
@@ -652,10 +707,16 @@ def vwap(
         return _to_output(vwap_series(h, l, c, v), bars, series)
     h, l, c, v = _cols(bars, "vwap", col_high, col_low, col_close, col_volume)
     session = bars[session_col]
-    if session.dtype == pl.Datetime:
-        session = session.dt.date()
+    if isinstance(session, pl.Series):
+        if session.dtype == pl.Datetime:
+            session = session.dt.date()
+        labels = session.to_numpy()
+    elif str(session.dtype).startswith("datetime64"):
+        labels = session.dt.date.to_numpy()  # pandas timestamps: anchor per calendar date
+    else:
+        labels = session.to_numpy()
     from .volume import anchored_vwap_series
-    return _to_output(anchored_vwap_series(h, l, c, v, session.to_numpy()), bars, series)
+    return _to_output(anchored_vwap_series(h, l, c, v, labels), bars, series)
 
 
 def obv(
@@ -669,10 +730,11 @@ def obv(
     col_low: str = DEFAULT_COL_LOW,
     col_open: str = DEFAULT_COL_OPEN,
 ) -> Union[float, "pl.Series"]:
-    """On-Balance Volume."""
+    """On-Balance Volume. Needs a DataFrame with price and volume columns."""
+    require_frame(bars, "obv", (col_close, col_volume))
     close = source_price(bars, source, col_open=col_open, col_high=col_high,
                          col_low=col_low, col_close=col_close) if source != "close" else ensure_array(bars, col_close)
-    vol = bars[col_volume].to_numpy().astype(np.float64) if isinstance(bars, pl.DataFrame) else np.zeros_like(close)
+    vol = _column(bars, col_volume)
     from .volume import obv_series
     return _to_output(obv_series(close, vol), bars, series)
 
@@ -688,12 +750,7 @@ def cmf(
     col_volume: str = DEFAULT_COL_VOLUME,
 ) -> Union[float, "pl.Series"]:
     """Chaikin Money Flow."""
-    if not isinstance(bars, pl.DataFrame):
-        raise TypeError("cmf() requires a polars DataFrame with OHLCV columns")
-    h = bars[col_high].to_numpy().astype(np.float64)
-    l = bars[col_low].to_numpy().astype(np.float64)
-    c = bars[col_close].to_numpy().astype(np.float64)
-    v = bars[col_volume].to_numpy().astype(np.float64)
+    h, l, c, v = _cols(bars, "cmf", col_high, col_low, col_close, col_volume)
     from .volume import cmf_series
     return _to_output(cmf_series(h, l, c, v, period), bars, series)
 
@@ -706,7 +763,7 @@ def volume_zscore(
     col_volume: str = DEFAULT_COL_VOLUME,
 ) -> Union[float, "pl.Series"]:
     """Volume z-score relative to rolling mean."""
-    vol = bars[col_volume].to_numpy().astype(np.float64) if isinstance(bars, pl.DataFrame) else ensure_array(bars)
+    vol = _column(bars, col_volume) if is_frame(bars) else ensure_array(bars)
     from .volume import volume_zscore_series
     return _to_output(volume_zscore_series(vol, period), bars, series)
 
@@ -765,14 +822,19 @@ def hurst(
     bars: Any,
     max_lag: int = 100,
     *,
-    min_lag: int = 2,
+    min_lag: int = 10,
     source: str = "close",
     col_close: str = DEFAULT_COL_CLOSE,
     col_high: str = DEFAULT_COL_HIGH,
     col_low: str = DEFAULT_COL_LOW,
     col_open: str = DEFAULT_COL_OPEN,
 ) -> float:
-    """Hurst exponent (H<0.5 mean-reverting, H=0.5 random, H>0.5 trending)."""
+    """Hurst exponent (H<0.5 mean-reverting, H=0.5 random, H>0.5 trending).
+
+    Bias-corrected rescaled range (Anis-Lloyd-Peters), so a random walk
+    reads about 0.5; see ``statistical.hurst_series``. NaN when the series
+    is too short for two block sizes between *min_lag* and *max_lag*.
+    """
     close = source_price(bars, source, col_open=col_open, col_high=col_high,
                          col_low=col_low, col_close=col_close) if source != "close" else ensure_array(bars, col_close)
     from .statistical import hurst_series
@@ -822,8 +884,9 @@ def linear_reg(
 #
 #  Shared input helpers keep the wrappers below short. Every wrapper
 #  follows the same contract as the functions above: ``series=False``
-#  returns the latest non-NaN value, ``series=True`` returns the full
-#  positional ``pl.Series`` with a leading NaN warm-up.
+#  returns the value at the latest bar (NaN, with a warning, if that bar
+#  has none), ``series=True`` returns the full positional ``pl.Series``
+#  with a leading NaN warm-up.
 # ═══════════════════════════════════════════════════════════════════
 
 def _price(
@@ -840,15 +903,13 @@ def _price(
     return ensure_array(bars, col_close)
 
 
-def _require_frame(bars: Any, fn: str) -> pl.DataFrame:
-    if not isinstance(bars, pl.DataFrame):
-        raise TypeError(f"{fn}() requires a polars DataFrame with the needed OHLCV columns")
-    return bars
+def _require_frame(bars: Any, fn: str) -> Any:
+    return require_frame(bars, fn, ("open", "high", "low", "close", "volume"))
 
 
 def _cols(bars: Any, fn: str, *cols: str) -> Tuple[np.ndarray, ...]:
-    df = _require_frame(bars, fn)
-    return tuple(df[c].to_numpy().astype(np.float64) for c in cols)
+    df = require_frame(bars, fn, cols)
+    return tuple(_column(df, c) for c in cols)
 
 
 # ── Extended trend ───────────────────────────────────────────────────
@@ -1815,8 +1876,7 @@ def pvo(
     The PVO line matches TA-Lib ``PVO``.
     """
     from .volume import pvo_series
-    vol = bars[col_volume].to_numpy().astype(np.float64) if isinstance(bars, pl.DataFrame) \
-        else ensure_array(bars)
+    vol = _column(bars, col_volume) if is_frame(bars) else ensure_array(bars)
     return _to_tuple_output(pvo_series(vol, fast_period, slow_period, signal_period), bars, series)
 
 
@@ -2028,8 +2088,38 @@ __all__ = [
     "candle_pattern", "candle_patterns", "CANDLE_PATTERN_NAMES",
     # Result types
     "MACDResult", "BollingerResult", "LinRegResult", "IchimokuResult", "DMIResult",
-    # Constants (overridable)
+    # Constants (defaults for reference, not global settings)
     "EPSILON", "TRADING_DAYS_PER_YEAR", "ANNUALIZATION_FACTOR",
     # Rust status
     "has_rust",
 ]
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  ``momentum`` IS BOTH AN INDICATOR AND A SUBMODULE
+#
+#  Importing a package's submodule binds it as an attribute of the
+#  package, so the first lazy ``from .momentum import ...`` (rsi, macd and
+#  most momentum wrappers do one) used to replace the ``momentum()``
+#  function with the module, and ``momentum(...)`` then raised
+#  "'module' object is not callable". The submodule is loaded here and made
+#  callable as the indicator, so ``momentum(bars, 10)`` and
+#  ``import cpz_quant.indicators.momentum as mo`` both work in any order.
+# ═══════════════════════════════════════════════════════════════════
+
+_momentum_indicator = momentum
+if not isinstance(_momentum_indicator, types.FunctionType):  # pragma: no cover
+    raise ImportError("cpz_quant.indicators: momentum() was shadowed before it could be wrapped")
+
+
+class _CallableIndicatorModule(types.ModuleType):
+    """The ``momentum`` submodule, also callable as the ``momentum()`` indicator."""
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        return _momentum_indicator(*args, **kwargs)
+
+
+_momentum_module = importlib.import_module(".momentum", __name__)
+_momentum_module.__class__ = _CallableIndicatorModule
+_momentum_module.__signature__ = inspect.signature(_momentum_indicator)  # type: ignore[attr-defined]
+globals()["momentum"] = _momentum_module

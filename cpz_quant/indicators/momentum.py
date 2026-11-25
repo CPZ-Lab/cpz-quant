@@ -32,7 +32,18 @@ def rsi_series(
     *,
     smoothing: str = "wilder",
 ) -> np.ndarray:
-    """Relative Strength Index.
+    """Relative Strength Index, ``100 * avg_gain / (avg_gain + avg_loss)``.
+
+    Matches TA-Lib ``RSI`` (Wilder smoothing seeded with the mean of the
+    first *period* changes), with two deliberate differences:
+
+    - When the averages are both exactly zero (no price change over the
+      whole seed and since), RSI is 0/0 and the value is NaN. TA-Lib
+      returns 0 there, which reads as deeply oversold on a flat price.
+    - A leading NaN warm-up (an RSI of an SMA) is skipped, so the first
+      value comes *period* bars after the input's first valid value. A NaN
+      after that makes the value and every later one NaN instead of
+      treating the missing bar as "no change".
 
     Args:
         close: Price array.
@@ -40,33 +51,35 @@ def rsi_series(
         smoothing: ``"wilder"`` (Wilder's smoothing, default) or ``"ema"``
                    (standard exponential smoothing).
     """
-    n = len(close)
-    out = np.full(n, np.nan)
-    if n < period + 1:
-        return out
-
-    deltas = np.diff(close)
-    gains = np.where(deltas > 0, deltas, 0.0)
-    losses = np.where(deltas < 0, -deltas, 0.0)
-
     if smoothing == "wilder":
-        avg_gain = np.mean(gains[:period])
-        avg_loss = np.mean(losses[:period])
-        out[period] = 100.0 - 100.0 / (1.0 + avg_gain / max(avg_loss, EPSILON))
         alpha = 1.0 / period
     elif smoothing == "ema":
-        avg_gain = np.mean(gains[:period])
-        avg_loss = np.mean(losses[:period])
-        out[period] = 100.0 - 100.0 / (1.0 + avg_gain / max(avg_loss, EPSILON))
         alpha = 2.0 / (period + 1)
     else:
         raise ValueError(f"Unknown smoothing '{smoothing}'. Use: wilder, ema")
 
+    close = np.asarray(close, dtype=np.float64)
+    n = len(close)
+    out = np.full(n, np.nan)
+    start = first_valid_index(close)
+    if n - start < period + 1:
+        return out
+
+    deltas = np.diff(close[start:])
+    gains = np.where(np.isnan(deltas), np.nan, np.maximum(deltas, 0.0))
+    losses = np.where(np.isnan(deltas), np.nan, np.maximum(-deltas, 0.0))
+
+    def value(g: float, loss: float) -> float:
+        den = g + loss
+        return 100.0 * g / den if den > 0.0 else np.nan
+
+    avg_gain = float(np.mean(gains[:period]))
+    avg_loss = float(np.mean(losses[:period]))
+    out[start + period] = value(avg_gain, avg_loss)
     for i in range(period, len(deltas)):
         avg_gain = alpha * gains[i] + (1.0 - alpha) * avg_gain
         avg_loss = alpha * losses[i] + (1.0 - alpha) * avg_loss
-        rs = avg_gain / max(avg_loss, EPSILON)
-        out[i + 1] = 100.0 - 100.0 / (1.0 + rs)
+        out[start + i + 1] = value(avg_gain, avg_loss)
 
     return out
 
@@ -80,6 +93,11 @@ def macd_series(
     signal_period: int = 9,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Moving Average Convergence Divergence.
+
+    The three averages are ``ema_series`` EMAs seeded with the first valid
+    value (no warm-up gap), not TA-Lib's simple-mean seed, so early values
+    differ from TA-Lib ``MACD`` (and from ``apo()``, which uses the TA-Lib
+    seed) until the seed has decayed; the signal line seeds the same way.
 
     Args:
         close: Price array.
@@ -128,14 +146,14 @@ def stochastic_series(
         rng = highest - lowest
         k[i] = ((close[i] - lowest) / rng * 100.0) if rng > EPSILON else 50.0
 
-    k_filled = np.nan_to_num(k, nan=50.0)
+    # %D averages real %K values only: the warm-up stays NaN instead of
+    # being filled with a made-up 50.
     if d_ma_type == "sma":
-        d = sma_series(k_filled, d_period)
+        d = sma_series(k, d_period)
     elif d_ma_type == "ema":
-        d = ema_series(k_filled, d_period)
+        d = ema_series(k, d_period)
     else:
         raise ValueError(f"Unknown d_ma_type '{d_ma_type}'. Use: sma, ema")
-    d[: k_period - 1] = np.nan
     return k, d
 
 
@@ -252,8 +270,8 @@ def adx_series(
             smoothed_plus = (smoothed_plus * (period - 1) + plus_dm[i]) / period
             smoothed_minus = (smoothed_minus * (period - 1) + minus_dm[i]) / period
 
-        plus_di = (smoothed_plus / smoothed_tr * 100.0) if smoothed_tr > EPSILON else 0.0
-        minus_di = (smoothed_minus / smoothed_tr * 100.0) if smoothed_tr > EPSILON else 0.0
+        plus_di = float(smoothed_plus / smoothed_tr * 100.0) if smoothed_tr > EPSILON else 0.0
+        minus_di = float(smoothed_minus / smoothed_tr * 100.0) if smoothed_tr > EPSILON else 0.0
         di_sum = plus_di + minus_di
         dx = (abs(plus_di - minus_di) / di_sum * 100.0) if di_sum > EPSILON else 0.0
         dx_values.append(dx)

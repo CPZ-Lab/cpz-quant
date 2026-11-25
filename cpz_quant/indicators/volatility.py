@@ -29,15 +29,20 @@ def true_range(
     low: np.ndarray,
     close: np.ndarray,
 ) -> np.ndarray:
-    """True Range: max(H-L, |H-prev_C|, |L-prev_C|)."""
-    n = len(close)
-    tr = np.empty(n)
-    tr[0] = high[0] - low[0]
-    for i in range(1, n):
-        tr[i] = max(
-            high[i] - low[i],
-            abs(high[i] - close[i - 1]),
-            abs(low[i] - close[i - 1]),
+    """True Range: max(H-L, |H-prev_C|, |L-prev_C|).
+
+    A missing high, low or previous close makes that bar's range NaN
+    (``np.maximum`` propagates NaN) instead of silently using the other
+    terms.
+    """
+    high = np.asarray(high, dtype=np.float64)
+    low = np.asarray(low, dtype=np.float64)
+    close = np.asarray(close, dtype=np.float64)
+    tr = high - low
+    if len(close) > 1:
+        prev = close[:-1]
+        tr[1:] = np.maximum(
+            np.maximum(tr[1:], np.abs(high[1:] - prev)), np.abs(low[1:] - prev)
         )
     return tr
 

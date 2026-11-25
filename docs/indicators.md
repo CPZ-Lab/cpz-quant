@@ -1,6 +1,6 @@
 # Indicators
 
-`cpz_quant.indicators` provides vectorised technical indicators over NumPy arrays and Polars data, organised by family. An optional Rust extension accelerates a few hot paths; without it, pure-Python/NumPy implementations run automatically.
+`cpz_quant.indicators` provides vectorised technical indicators over NumPy arrays and Polars or pandas data, organised by family. An optional Rust extension accelerates a few hot paths; without it, pure-Python/NumPy implementations run automatically.
 
 ## Families
 
@@ -21,7 +21,7 @@ import cpz_quant.indicators as ind
 
 bars = pl.DataFrame({"open": ..., "high": ..., "low": ..., "close": ..., "volume": ...})
 
-ind.hma(bars, 20)                     # latest value (float)
+ind.hma(bars, 20)                     # value at the latest bar (float)
 ind.hma(bars, 20, series=True)        # full pl.Series with leading NaN warm-up
 ind.dmi(bars, 14).adx                 # named result for multi-output indicators
 ind.vwap(bars, session_col="ts")      # VWAP that restarts every trading date
@@ -37,13 +37,17 @@ sar = trend.psar_series(high, low)
 k, d = momentum.stochrsi_series(close)
 ```
 
-Note that the `momentum` *function* at the package root shadows the `momentum` module, so import submodules directly as above when you want the numpy kernels.
+`ind.momentum` is both the momentum indicator and that submodule: `ind.momentum(bars, 10)` computes the indicator and `import cpz_quant.indicators.momentum` gives the numpy kernels, in any order.
 
 ## Conventions
 
-- Warm-up bars are NaN. Nothing is back-filled or fabricated; an undefined ratio (for example a Sortino ratio with no downside observations) is NaN.
+- Warm-up bars are NaN. Nothing is back-filled or fabricated; an undefined ratio (for example a Sortino ratio with no downside observations, or RSI on a price that has not moved) is NaN.
+- The scalar form returns the value at the latest bar, never an older one. A missing bar (NaN) blanks the windows that contain it; for recursive smoothers (EMA and its family, MACD, RSI, ATR) every later value is NaN, as in TA-Lib. When the latest value is NaN the call warns (`RuntimeWarning`). An empty input raises `ValueError` in the scalar form.
+- An indicator of an indicator (an SMA of RSI, an RSI of an SMA) skips the input's NaN warm-up and starts when the input has values, as TA-Lib does.
+- Inputs: a polars or pandas DataFrame (columns by name), a polars or pandas Series, a 1-D NumPy array or a list. A 2-D array, a derived `source` (`hl2` and so on) on a single series, or `obv()` without a volume column raise instead of guessing.
+- `TRADING_DAYS_PER_YEAR` and the other constants are defaults bound into the signatures, not global settings; pass `trading_days=` per call (365 for crypto).
 - Exponential smoothers in the indicators added after 1.1.0 are seeded with the simple mean of their first `period` valid inputs, the TA-Lib and TradingView convention. The older `ema`, `dema`, `tema`, `macd`, `atr` and `adx` seed from the first bar instead and emit no or shorter warm-up; they converge to TA-Lib once the seed decays, and the test suite checks that. `dmi()` provides a TA-Lib-exact ADX.
-- Where published definitions disagree, the docstring names the choice. Examples: Ichimoku spans are displaced forward (no look-ahead) and the Chikou span is not returned; DPO is not centred (centring uses future prices); PPO defaults to EMAs although TA-Lib's own default is SMA; Klinger uses the simplified signed-volume form; Connors RSI's percent rank counts strictly smaller values.
+- Where published definitions disagree, the docstring names the choice. Examples: Ichimoku spans are displaced forward (no look-ahead; `displacement` must be at least 1) and the Chikou span is not returned; Supertrend follows pandas-ta and flips on the bar that closes through the band; the Hurst exponent is the bias-corrected (Anis-Lloyd-Peters) rescaled range, so a random walk reads about 0.5; DPO is not centred (centring uses future prices); PPO defaults to EMAs although TA-Lib's own default is SMA; Klinger uses the simplified signed-volume form; Connors RSI's percent rank counts strictly smaller values.
 
 ## Verification
 

@@ -1,6 +1,6 @@
 """Public wrapper contract for the extended indicators.
 
-Every wrapper accepts a polars DataFrame, returns the latest non-NaN value
+Every wrapper accepts a polars DataFrame, returns the value at the latest bar
 by default and a full-length ``pl.Series`` with ``series=True``, and agrees
 with the underlying numpy kernel.
 """
