@@ -15,7 +15,9 @@ All notable changes to cpz-quant are documented here. The format follows [Keep a
   QUBO modes used them backwards), and the default heuristic is spectral
   seriation with swap refinement, which reorders dense correlation matrices
   (reverse Cuthill-McKee left them unsorted). Brute force and the split search
-  are vectorised (same results): on a laptop the heuristic takes about 0.2 s
+  are vectorised (same results; when several splits tie exactly, the first is
+  taken, which no longer depends on summation rounding): on a laptop the
+  heuristic takes about 0.2 s
   for 300 assets and 0.7 s for 500 (before vectorising the split search, 1 s
   and 6.5 s), and brute force about 0.3 s for 9 assets.
 - `risk_parity` solves equal risk contribution by cyclical coordinate descent;

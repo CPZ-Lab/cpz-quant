@@ -1628,7 +1628,13 @@ def _optimal_bisect(similarity: np.ndarray, indices: List[int]) -> Tuple[List[in
     k = np.arange(1, n)
     cross = prefix[k - 1, n - 1] - prefix[k - 1, k - 1]
     avg_cost = cross / (k * (n - k))
-    best_split = int(k[np.argmin(avg_cost)])  # first minimum, as before
+    # Splits whose costs tie in exact arithmetic can differ by summation
+    # rounding, so take the first split within a relative 1e-9 of the minimum:
+    # the choice among exact ties is then the smallest k, independent of how
+    # the sums were accumulated.
+    lowest = float(avg_cost.min())
+    tied = avg_cost <= lowest + 1e-9 * max(abs(lowest), float(np.abs(avg_cost).max()), 1e-300)
+    best_split = int(k[np.argmax(tied)])
     return indices[:best_split], indices[best_split:]
 
 

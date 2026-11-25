@@ -15,6 +15,7 @@ import pytest
 from cpz_quant.portfolio.optimization import (
     _build_matrices,
     _cluster_labels,
+    _optimal_bisect,
     _quasi_block_diag_objective,
     build_permutation_qubo,
     hierarchical_equal_risk_contribution,
@@ -185,6 +186,27 @@ def test_qhrp_qubo_solution_is_decoded_as_positions():
     r = quantum_inspired_hrp(rets, solver=OneHot())
     assert r.info["permutation"] == [int(i) for i in np.argsort(best)]
     assert r.info["qubo_feasible"] is True
+
+
+@pytest.mark.parametrize("n", [5, 28, 41])
+def test_qhrp_split_takes_the_first_of_tied_splits(n):
+    # Equal similarities: every split has the same average coupling in exact
+    # arithmetic, so the rule "first minimum" must pick k = 1 however the sums
+    # round (summation order once made n = 28 pick 21 or 8).
+    sim = np.full((n + 3, n + 3), 0.37)
+    np.fill_diagonal(sim, 1.0)
+    indices = list(range(3, n + 3))[::-1]
+    left, right = _optimal_bisect(sim, indices)
+    assert left == indices[:1] and right == indices[1:]
+
+
+def test_qhrp_split_prefers_the_strictly_better_split():
+    # Two blocks of 3 and 5: cutting between them is strictly best.
+    sim = np.full((8, 8), 0.1)
+    sim[:3, :3] = sim[3:, 3:] = 0.9
+    np.fill_diagonal(sim, 1.0)
+    left, right = _optimal_bisect(sim, list(range(8)))
+    assert left == [0, 1, 2] and right == [3, 4, 5, 6, 7]
 
 
 def test_qhrp_split_is_inverse_variance():
