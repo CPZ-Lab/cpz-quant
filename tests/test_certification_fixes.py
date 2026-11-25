@@ -85,6 +85,25 @@ def test_3047_worst_month_includes_the_first_trading_day():
     assert a.worst_month == pytest.approx(-0.10, abs=1e-3)
 
 
+def test_3047_short_wiped_out_curve_still_shows_total_loss():
+    eq = _equity(np.full(12, 0.002)) + [0.0]
+    a = compute_risk_analytics(eq)
+    assert a is not None  # too short for statistics, not too short to show a wipe-out
+    assert a.max_drawdown == -1.0 and a.annualized_return == -1.0
+    assert a.sharpe is None and a.var95 is None
+    assert compute_risk_analytics(_equity(np.full(12, 0.002))) is None
+
+
+def test_3047_regime_breakdown_counts_a_wipe_out():
+    rng = np.random.default_rng(4700)
+    eq = _equity(rng.normal(0.0005, 0.01, 200)) + [0.0, 0.0, 0.0]
+    b = regime_conditional_performance(eq)
+    days = sum(r.n_days for r in b.vol_regimes)
+    worst = min(r.annualized_return for r in b.vol_regimes if r.n_days)
+    assert worst == -1.0  # the regime holding the wipe-out day lost everything
+    assert days == 200 - 21 + 1  # the -100% day is counted, nothing after it
+
+
 def test_3047_wiped_out_curve_shows_total_loss():
     rng = np.random.default_rng(470)
     eq = _equity(rng.normal(0.0004, 0.01, 250)) + [0.0] * 15
@@ -177,6 +196,29 @@ def test_3069_numpy_numbers_and_flags_are_numbers_and_flags():
 # ── #3177: drawdown units ────────────────────────────────────────────────
 
 
+def test_3177_wiped_out_fraction_is_refused_with_or_without_analytics():
+    eq = _equity(np.full(250, 0.001)) + [0.0] * 15
+    a = compute_risk_analytics(eq)
+    assert a.max_drawdown == -1.0
+    for analytics in (None, a):
+        with pytest.raises(ValueError, match="percent"):
+            certify(backtest_verified=True, rigor=_rig(), analytics=analytics,
+                    metrics=CertMetrics(sharpe_ratio=1.2, max_drawdown=a.max_drawdown))
+    ok = certify(backtest_verified=True, rigor=_rig(), analytics=a,
+                 metrics=CertMetrics(sharpe_ratio=1.2, max_drawdown=a.max_drawdown * 100))
+    assert {d.key: d for d in ok.dimensions}["risk"].detail.startswith("Max drawdown 100.0%")
+
+
+def test_3177_fraction_matching_analytics_is_refused_at_any_size():
+    # A leveraged book ending below zero: drawdown beyond -100% (-1.04 as a fraction).
+    eq = _equity(np.full(250, 0.001)) + [-5.0]
+    a = compute_risk_analytics(eq)
+    assert a.max_drawdown < -1.0
+    with pytest.raises(ValueError, match="fraction"):
+        certify(backtest_verified=True, rigor=_rig(), analytics=a,
+                metrics=CertMetrics(sharpe_ratio=1.2, max_drawdown=a.max_drawdown))
+
+
 def test_3177_fractional_drawdown_is_refused():
     with pytest.raises(ValueError, match="percent"):
         certify(backtest_verified=True, rigor=_rig(),
@@ -210,8 +252,9 @@ def test_3145_exact_fit_gives_undefined_not_absurd_stats():
     fa = factor_attribution(y, f)
     assert fa.r_squared == 1.0
     assert fa.alpha_daily == pytest.approx(0.0, abs=1e-12)
-    assert math.isnan(fa.alpha_tstat)
-    assert math.isnan(fa.idiosyncratic_sharpe)
+    assert fa.alpha_tstat is None  # undefined, and None keeps the result valid JSON
+    assert fa.idiosyncratic_sharpe is None
+    assert all(t is None for t in fa.beta_tstats.values())
     assert fa.betas == {"EFA": 0.5, "IEF": 0.3, "GLD": 0.2}
 
 

@@ -58,6 +58,38 @@ def test_3045_a_tiny_top_up_adds_its_dollar_cost_not_its_full_spread():
     assert topped.estimated_cost_bps - base.estimated_cost_bps < 0.01
 
 
+def test_3045_missing_liquidity_inputs_raise_instead_of_being_invented():
+    common = dict(cost_model=CostModel(), portfolio_value=50e6)
+    with pytest.raises(ValueError, match=r"no positive ADV for \['B'\]"):
+        turnover_analysis({"A": 0.5, "B": 0.5}, {"A": 0.47, "B": 0.53},
+                          adv={"A": 1e8}, volatility={"A": 0.02, "B": 0.02}, **common)
+    with pytest.raises(ValueError, match=r"no positive daily volatility for \['A'\]"):
+        turnover_analysis({"A": 0.5, "B": 0.5}, {"A": 0.47, "B": 0.53},
+                          adv={"A": 1e8, "B": 1e8}, volatility={"A": 0.0, "B": 0.02}, **common)
+    # The linear model does not use volatility, so none is required.
+    lin = turnover_analysis({"A": 0.5, "B": 0.5}, {"A": 0.47, "B": 0.53},
+                            cost_model=CostModel(impact_model="linear"),
+                            adv={"A": 1e8, "B": 1e8}, portfolio_value=50e6)
+    assert lin.estimated_cost_bps > 0
+
+
+def test_3045_without_a_cost_model_the_cost_is_unknown_not_zero():
+    res = turnover_analysis({"A": 0.5, "B": 0.5}, {"A": 0.47, "B": 0.53})
+    assert res.two_way_turnover == pytest.approx(0.06)
+    assert res.estimated_cost_bps is None and res.estimated_cost_usd is None
+    assert res.per_asset_cost_bps == {}
+
+
+def test_3045_square_root_impact_needs_a_real_volatility():
+    # sigma used to become 1.0 (100% a day): 163 bps instead of 8.16 for this trade.
+    with pytest.raises(ValueError, match="volatility"):
+        CostModel(spread_bps=8, commission_bps=1).estimate(2e6, 80e6)
+    with pytest.raises(ValueError, match="adv"):
+        CostModel().estimate(2e6, 0.0, 0.02)
+    with pytest.raises(ValueError, match="volatility"):
+        total_cost(2e6, 80e6, 0.0, impact_model="almgren_chriss")
+
+
 # ── #3070: cost model semantics ──────────────────────────────────────────
 
 
@@ -122,6 +154,13 @@ def test_3050_thin_short_leg_sets_capacity():
     assert {p["symbol"] for p in cap.per_symbol} == {"BIG", "THIN"}
     same_long = alpha_decay_capacity(500, 4.0, _long_short(0.5))
     assert cap.capacity_usd == same_long.capacity_usd
+
+
+def test_3050_position_without_volatility_is_refused():
+    book = _long_short(-0.5)
+    book[0].pop("volatility")
+    with pytest.raises(ValueError, match="BIG"):
+        alpha_decay_capacity(500, 4.0, book)
 
 
 def test_3050_position_without_adv_is_refused():
@@ -242,7 +281,7 @@ def test_3039_noise_shows_no_momentum_premium():
     ts = []
     for seed in range(8):
         rets, caps = _noise_universe(seed)
-        m = fundamental_factors(rets, caps)
+        m = fundamental_factors(rets, caps, caps_at_start=True)
         assert m.start_index == 252 and len(m.factor_returns["momentum"]) == 504 - 252
         ts.append(m.t_stats["momentum"])
     # In-sample exposures gave t of about +5 on every seed (premium ~ 252 / days).
@@ -252,11 +291,11 @@ def test_3039_noise_shows_no_momentum_premium():
 
 def test_3039_exposures_never_use_later_returns():
     rets, caps = _noise_universe(1, n_assets=30, days=400)
-    base = fundamental_factors(rets, caps, momentum_window=120)
+    base = fundamental_factors(rets, caps, momentum_window=120, caps_at_start=True)
     k = 300  # a day inside every earlier momentum window
     bumped = {s: list(v) for s, v in rets.items()}
     bumped["S0"][k] += 0.5
-    after = fundamental_factors(bumped, caps, momentum_window=120)
+    after = fundamental_factors(bumped, caps, momentum_window=120, caps_at_start=True)
     days_before = k - base.start_index
     for f in base.factor_returns:
         np.testing.assert_array_equal(
@@ -268,7 +307,33 @@ def test_3039_missing_market_cap_is_refused():
     rets, caps = _noise_universe(2, n_assets=10, days=60)
     caps.pop("S3")
     with pytest.raises(KeyError, match="S3"):
+        fundamental_factors(rets, caps, caps_at_start=True)
+
+
+def test_3039_single_number_caps_need_an_explicit_start_of_sample_flag():
+    rets, caps = _noise_universe(4, n_assets=10, days=60)
+    with pytest.raises(ValueError, match="caps_at_start=True"):
         fundamental_factors(rets, caps)
+
+
+def test_3039_cap_series_with_book_values_show_no_premia_in_noise():
+    """Caps given day by day (the honest input) carry no look-ahead.
+
+    Today's caps passed as single numbers gave a value t-stat of about -2.4
+    on average over 40 noise universes; caps known each day give noise-level
+    t-stats for size and value.
+    """
+    t_size, t_value = [], []
+    for seed in range(12):
+        rets, start_caps = _noise_universe(100 + seed, n_assets=50, days=300)
+        cap_series = {k: (start_caps[k] * np.cumprod(1 + np.asarray(v))).tolist()
+                      for k, v in rets.items()}
+        books = {k: 0.5 * start_caps[k] for k in rets}
+        m = fundamental_factors(rets, cap_series, book_values=books, momentum_window=400)
+        assert m.start_index == 1
+        t_size.append(m.t_stats["size"])
+        t_value.append(m.t_stats["value"])
+    assert abs(np.mean(t_size)) < 1.0 and abs(np.mean(t_value)) < 1.0
 
 
 # ── #3006: walk-forward validation accepts the frame the docs build ──────

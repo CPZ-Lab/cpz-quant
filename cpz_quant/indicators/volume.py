@@ -11,7 +11,7 @@ from typing import Tuple
 
 import numpy as np
 
-from ._helpers import EPSILON, ema_sma_seed, rolling_apply, safe_divide, shift
+from ._helpers import EPSILON, ema_sma_seed, ratio, rolling_apply, safe_divide, shift
 
 # ── VWAP ─────────────────────────────────────────────────────────────
 
@@ -42,11 +42,19 @@ def vwap_series(
 # ── OBV ──────────────────────────────────────────────────────────────
 
 def obv_series(close: np.ndarray, volume: np.ndarray) -> np.ndarray:
-    """On-Balance Volume."""
+    """On-Balance Volume.
+
+    A missing close or volume makes that bar and every later running total
+    NaN: the cumulative sum cannot skip a bar without inventing its sign.
+    """
     n = len(close)
     out = np.zeros(n)
+    if n and (np.isnan(close[0]) or np.isnan(volume[0])):
+        out[0] = np.nan
     for i in range(1, n):
-        if close[i] > close[i - 1]:
+        if np.isnan(close[i]) or np.isnan(close[i - 1]) or np.isnan(volume[i]):
+            out[i] = np.nan
+        elif close[i] > close[i - 1]:
             out[i] = out[i - 1] + volume[i]
         elif close[i] < close[i - 1]:
             out[i] = out[i - 1] - volume[i]
@@ -107,7 +115,7 @@ def volume_zscore_series(
         window = volume[i - period + 1 : i + 1]
         mean = np.mean(window)
         std = np.std(window, ddof=1)
-        out[i] = (volume[i] - mean) / std if std > EPSILON else 0.0
+        out[i] = ratio(volume[i] - mean, std, 0.0)
     return out
 
 

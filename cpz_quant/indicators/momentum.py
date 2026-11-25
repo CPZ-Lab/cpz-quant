@@ -14,10 +14,10 @@ from typing import Tuple
 import numpy as np
 
 from ._helpers import (
-    EPSILON,
     _rolling_view,
     ema_sma_seed,
     first_valid_index,
+    ratio,
     rolling_apply,
     safe_divide,
     shift,
@@ -144,7 +144,8 @@ def stochastic_series(
         highest = np.max(high[i - k_period + 1 : i + 1])
         lowest = np.min(low[i - k_period + 1 : i + 1])
         rng = highest - lowest
-        k[i] = ((close[i] - lowest) / rng * 100.0) if rng > EPSILON else 50.0
+        # A zero range (flat prices) is 0/0: NaN, not a made-up 50.
+        k[i] = ratio(close[i] - lowest, rng, np.nan) * 100.0
 
     # %D averages real %K values only: the warm-up stays NaN instead of
     # being filled with a made-up 50.
@@ -165,14 +166,14 @@ def williams_r_series(
     close: np.ndarray,
     period: int = 14,
 ) -> np.ndarray:
-    """Williams %R oscillator (range: -100 to 0)."""
+    """Williams %R oscillator (range: -100 to 0); NaN when the range is zero."""
     n = len(close)
     out = np.full(n, np.nan)
     for i in range(period - 1, n):
         highest = np.max(high[i - period + 1 : i + 1])
         lowest = np.min(low[i - period + 1 : i + 1])
         rng = highest - lowest
-        out[i] = ((highest - close[i]) / rng * -100.0) if rng > EPSILON else -50.0
+        out[i] = ratio(highest - close[i], rng, np.nan) * -100.0
     return out
 
 
@@ -201,7 +202,7 @@ def cci_series(
         mean_tp = np.mean(window)
         mean_dev = np.mean(np.abs(window - mean_tp))
         denom = constant * mean_dev
-        out[i] = (tp[i] - mean_tp) / denom if denom > EPSILON else 0.0
+        out[i] = ratio(tp[i] - mean_tp, denom, 0.0)
     return out
 
 
@@ -213,7 +214,7 @@ def roc_series(close: np.ndarray, period: int = 12) -> np.ndarray:
     out = np.full(n, np.nan)
     for i in range(period, n):
         prev = close[i - period]
-        out[i] = ((close[i] - prev) / prev * 100.0) if abs(prev) > EPSILON else 0.0
+        out[i] = ratio(close[i] - prev, prev, 0.0) * 100.0
     return out
 
 
@@ -225,7 +226,7 @@ def momentum_pct_series(close: np.ndarray, period: int = 20) -> np.ndarray:
     out = np.full(n, np.nan)
     for i in range(period, n):
         prev = close[i - period]
-        out[i] = ((close[i] / prev - 1.0) * 100.0) if abs(prev) > EPSILON else 0.0
+        out[i] = (ratio(close[i], prev, 1.0) - 1.0) * 100.0
     return out
 
 
@@ -250,6 +251,11 @@ def adx_series(
     for i in range(1, n):
         h_diff = high[i] - high[i - 1]
         l_diff = low[i - 1] - low[i]
+        if np.isnan(h_diff) or np.isnan(l_diff) or np.isnan(close[i - 1]):
+            # A missing bar: no range or move can be read, and the Wilder
+            # averages below stay NaN from here on.
+            tr[i] = plus_dm[i] = minus_dm[i] = np.nan
+            continue
         tr[i] = max(
             high[i] - low[i],
             abs(high[i] - close[i - 1]),
@@ -258,9 +264,9 @@ def adx_series(
         plus_dm[i] = h_diff if (h_diff > l_diff and h_diff > 0) else 0.0
         minus_dm[i] = l_diff if (l_diff > h_diff and l_diff > 0) else 0.0
 
-    smoothed_tr = np.mean(tr[1 : period + 1])
-    smoothed_plus = np.mean(plus_dm[1 : period + 1])
-    smoothed_minus = np.mean(minus_dm[1 : period + 1])
+    smoothed_tr = float(np.mean(tr[1 : period + 1]))
+    smoothed_plus = float(np.mean(plus_dm[1 : period + 1]))
+    smoothed_minus = float(np.mean(minus_dm[1 : period + 1]))
 
     dx_values: list[float] = []
 
@@ -270,10 +276,10 @@ def adx_series(
             smoothed_plus = (smoothed_plus * (period - 1) + plus_dm[i]) / period
             smoothed_minus = (smoothed_minus * (period - 1) + minus_dm[i]) / period
 
-        plus_di = float(smoothed_plus / smoothed_tr * 100.0) if smoothed_tr > EPSILON else 0.0
-        minus_di = float(smoothed_minus / smoothed_tr * 100.0) if smoothed_tr > EPSILON else 0.0
+        plus_di = ratio(smoothed_plus, smoothed_tr, 0.0) * 100.0
+        minus_di = ratio(smoothed_minus, smoothed_tr, 0.0) * 100.0
         di_sum = plus_di + minus_di
-        dx = (abs(plus_di - minus_di) / di_sum * 100.0) if di_sum > EPSILON else 0.0
+        dx = ratio(abs(plus_di - minus_di), di_sum, 0.0) * 100.0
         dx_values.append(dx)
 
         if len(dx_values) == period:
@@ -304,13 +310,19 @@ def mfi_series(
     for i in range(period, n):
         pos_flow = 0.0
         neg_flow = 0.0
+        missing = False
         for j in range(i - period + 1, i + 1):
+            if np.isnan(tp[j]) or np.isnan(tp[j - 1]) or np.isnan(raw_mf[j]):
+                missing = True
+                break
             if tp[j] > tp[j - 1]:
                 pos_flow += raw_mf[j]
             elif tp[j] < tp[j - 1]:
                 neg_flow += raw_mf[j]
-        mfr = pos_flow / max(neg_flow, EPSILON)
-        out[i] = 100.0 - 100.0 / (1.0 + mfr)
+        # 100 * pos / (pos + neg); a missing bar in the window or no price
+        # change at all (0/0) is NaN, not 0.
+        total = pos_flow + neg_flow
+        out[i] = np.nan if missing or total <= 0.0 else 100.0 * pos_flow / total
 
     return out
 
@@ -471,7 +483,8 @@ def ultosc_series(
 
     ``BP = close - min(low, prev_close)``, ``TR = max(high, prev_close) - min(low, prev_close)``;
     ``UO = 100 * (4*A1 + 2*A2 + A3) / 7`` with ``Ai = sum(BP)/sum(TR)`` over
-    each period (a zero TR sum contributes 0).
+    each period. A zero TR sum (flat prices) is 0/0 and gives NaN; TA-Lib
+    counts it as 0, which reads as deeply oversold.
     """
     n = len(close)
     bp = np.full(n, np.nan)
@@ -483,7 +496,7 @@ def ultosc_series(
         tr[1:] = true_high - true_low
 
     def avg(p: int) -> np.ndarray:
-        return safe_divide(rolling_apply(bp, p, "sum"), rolling_apply(tr, p, "sum"), fill=0.0)
+        return safe_divide(rolling_apply(bp, p, "sum"), rolling_apply(tr, p, "sum"), fill=np.nan)
 
     uo = 100.0 * (4.0 * avg(period1) + 2.0 * avg(period2) + avg(period3)) / 7.0
     uo[: max(period1, period2, period3)] = np.nan
@@ -671,7 +684,7 @@ def fisher_transform_series(
     f = 0.0
     for i in range(period - 1, n):
         rng = hh[i] - ll[i]
-        norm = (hl2[i] - ll[i]) / rng if rng > EPSILON else 0.5
+        norm = ratio(hl2[i] - ll[i], rng, 0.5)
         v = 0.66 * (norm - 0.5) + 0.67 * v
         if v > 0.99:
             v = 0.999

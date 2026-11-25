@@ -16,6 +16,7 @@ from ._helpers import (
     EPSILON,
     TRADING_DAYS_PER_YEAR,
     _rolling_view,
+    ratio,
     rolling_apply,
     safe_divide,
 )
@@ -41,7 +42,7 @@ def zscore_series(
         window = values[i - period + 1 : i + 1]
         mean = np.mean(window)
         std = np.std(window, ddof=ddof)
-        out[i] = (values[i] - mean) / std if std > EPSILON else 0.0
+        out[i] = ratio(values[i] - mean, std, 0.0)
     return out
 
 
@@ -220,7 +221,7 @@ def linear_reg_series(
         a = y_mean - b * x_mean
         slope[i] = b
         intercept[i] = a
-        r_sq[i] = (ss_xy ** 2) / (ss_x * ss_y) if ss_y > EPSILON else 0.0
+        r_sq[i] = ratio(ss_xy ** 2, ss_x * ss_y, 0.0)
         forecast[i] = a + b * period
 
     return slope, r_sq, intercept, forecast

@@ -359,3 +359,84 @@ def test_3054_too_short_is_nan_not_a_made_up_half():
 def test_3054_non_positive_prices_are_refused():
     with pytest.raises(ValueError, match="positive"):
         ind.hurst(np.r_[np.linspace(1, 2, 100), 0.0])
+
+
+# ── Review follow-up: a NaN in a window never becomes a made-up number ───
+
+
+def _gap_bars(bars, col, k):
+    values = bars[col].to_numpy().astype(float).copy()
+    values[k] = np.nan
+    return bars.with_columns(pl.Series(col, values))
+
+
+K = 300  # bar index of the missing value
+
+
+@pytest.mark.parametrize("name, col, call, at", [
+    ("cci", "close", lambda b: ind.cci(b, 20, series=True), K + 1),
+    ("zscore", "close", lambda b: ind.zscore(b, 60, series=True), K + 1),
+    ("roc", "close", lambda b: ind.roc(b, 10, series=True), K + 10),
+    ("momentum", "close", lambda b: ind.momentum(b, 10, series=True), K + 10),
+    ("stc", "close", lambda b: ind.stc(b, series=True), K + 1),
+    ("mfi", "close", lambda b: ind.mfi(b, 14, series=True), K + 1),
+    ("obv", "close", lambda b: ind.obv(b, series=True), K + 1),
+    ("linreg_r2", "close", lambda b: ind.linear_reg(b, 20, series=True).r_squared, K + 1),
+    ("volume_zscore", "volume", lambda b: ind.volume_zscore(b, 20, series=True), K + 1),
+    ("williams_r", "high", lambda b: ind.williams_r(b, 14, series=True), K + 1),
+    ("stochastic_k", "high", lambda b: ind.stochastic(b, 14, 3, series=True)[0], K + 1),
+    ("fisher", "high", lambda b: ind.fisher_transform(b, 9, series=True)[0], K + 1),
+    ("adx", "high", lambda b: ind.adx(b, 14, series=True), K + 1),
+])
+def test_review_nan_in_window_gives_nan(bars, name, col, call, at):
+    clean = call(bars).to_numpy()
+    gapped = call(_gap_bars(bars, col, K)).to_numpy()
+    assert np.isfinite(clean[at])
+    assert np.isnan(gapped[at]), f"{name} turned a missing bar into {gapped[at]}"
+
+
+@pytest.fixture(scope="module")
+def flat_bars():
+    n = 60
+    return pl.DataFrame({k: np.full(n, 25.0) for k in ("open", "high", "low", "close")}
+                        ).with_columns(pl.Series("volume", np.full(n, 1e5)))
+
+
+@pytest.mark.parametrize("call", [
+    lambda b: ind.mfi(b, 14, series=True),
+    lambda b: ind.ultimate_oscillator(b, series=True),
+    lambda b: ind.stochastic(b, 14, 3, series=True)[0],
+    lambda b: ind.williams_r(b, 14, series=True),
+])
+def test_review_flat_prices_are_undefined_not_a_reading(flat_bars, call):
+    # 0 gains over 0 losses (or a zero range) is 0/0; these used to read 0, 50 or -50.
+    assert np.isnan(call(flat_bars).to_numpy()).all()
+
+
+def test_review_flat_after_moves_warns_and_returns_nan(bars, flat_bars):
+    moving = bars.head(100)
+    flat_tail = pl.concat([moving, flat_bars.with_columns(
+        [pl.lit(float(moving["close"][-1])).alias(c) for c in ("open", "high", "low", "close")])])
+    with pytest.warns(RuntimeWarning, match="latest value is NaN"):
+        assert math.isnan(ind.williams_r(flat_tail, 14))
+
+
+def test_review_momentum_pickles_and_documents_the_indicator(ohlcv):
+    import pickle
+
+    again = pickle.loads(pickle.dumps(ind.momentum))
+    assert again is ind.momentum
+    assert again(ohlcv["close"], 10) == ind.momentum(ohlcv["close"], 10)
+    assert ind.momentum.__doc__.startswith("Simple price momentum")
+
+
+def test_review_sma_matches_a_plain_window_mean_with_gaps():
+    rng = np.random.default_rng(7)
+    x = rng.normal(100, 5, 2000)
+    x[[0, 1, 500, 1500]] = np.nan
+    ours = tr.sma_series(x, 30)
+    ref = np.full(x.size, np.nan)
+    for t in range(29, x.size):
+        w = x[t - 29 : t + 1]
+        ref[t] = w.mean() if np.isfinite(w).all() else np.nan
+    np.testing.assert_allclose(ours, ref, rtol=1e-12, atol=1e-12)

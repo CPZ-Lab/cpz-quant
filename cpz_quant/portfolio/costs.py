@@ -26,16 +26,17 @@ class TurnoverResult:
     """Portfolio turnover analysis.
 
     ``estimated_cost_bps`` is the cost of the whole rebalance in basis points
-    of portfolio value (``estimated_cost_usd`` in dollars).
+    of portfolio value (``estimated_cost_usd`` in dollars); both are ``None``
+    when no cost model was given (the cost is unknown, not zero).
     ``per_asset_cost_bps`` is each trade's cost in basis points of that
     trade's own notional, so those figures are not additive.
     """
     one_way_turnover: float = 0.0
     two_way_turnover: float = 0.0
-    estimated_cost_bps: float = 0.0
+    estimated_cost_bps: Optional[float] = None
     per_asset_turnover: Dict[str, float] = field(default_factory=dict)
     per_asset_cost_bps: Dict[str, float] = field(default_factory=dict)
-    estimated_cost_usd: float = 0.0
+    estimated_cost_usd: Optional[float] = None
 
 
 IMPACT_MODELS = ("sqrt", "linear", "almgren_chriss")
@@ -99,7 +100,9 @@ class CostModel:
         """Cost of one trade (one leg, a buy or a sell) split into its parts, in bps.
 
         A sell costs the same as a buy of the same size: impact depends on
-        ``abs(notional)``.
+        ``abs(notional)``. Every model needs ``adv > 0``; the sqrt and
+        Almgren-Chriss models also need ``volatility > 0`` (``ValueError``
+        otherwise).
         """
         spread = self.spread_bps / 2.0
         if self.impact_model == "almgren_chriss":
@@ -142,6 +145,16 @@ class CostModel:
         return self.breakdown(notional, adv, volatility).total_cost_bps
 
 
+def _require_liquidity(adv: float, volatility: Optional[float] = None, *, model: str) -> None:
+    """Impact needs the name's ADV (and, for vol-scaled models, its volatility)."""
+    if not (adv == adv and adv > 0):  # also rejects NaN
+        raise ValueError(f"{model} impact needs the average daily volume (adv > 0), got {adv}")
+    if volatility is not None and not (volatility == volatility and volatility > 0):
+        raise ValueError(
+            f"{model} impact needs the asset's daily volatility (> 0), got {volatility}"
+        )
+
+
 def almgren_chriss(
     notional: float,
     adv: float,
@@ -168,9 +181,7 @@ def almgren_chriss(
         beta: Temporary impact exponent.
         participation_rate: Fraction of ADV consumed per time unit.
     """
-    if adv < EPSILON or volatility < EPSILON:
-        return CostEstimate()
-
+    _require_liquidity(adv, volatility, model="Almgren-Chriss")
     q_over_v = abs(notional) / adv  # a sell moves the price as much as a buy
     perm = gamma * volatility * (q_over_v ** alpha) * 10000.0
 
@@ -198,9 +209,11 @@ def linear_impact(
         notional: Trade notional (a sell may be negative; it costs the same).
         adv: Average daily volume.
         coefficient: Impact coefficient (calibrate to your market).
+
+    Raises:
+        ValueError: ``adv`` is not positive (unknown liquidity is not free).
     """
-    if adv < EPSILON:
-        return 0.0
+    _require_liquidity(adv, model="linear")
     return coefficient * (abs(notional) / adv) * 10000.0
 
 
@@ -209,7 +222,7 @@ def sqrt_impact(
     adv: float,
     *,
     coefficient: float = 0.1,
-    volatility: float = 0.0,
+    volatility: Optional[float] = None,
     exponent: float = 0.5,
 ) -> float:
     """Square-root market impact (Torre 1997, Barra).
@@ -220,13 +233,16 @@ def sqrt_impact(
         notional: Trade notional (a sell may be negative; it costs the same).
         adv: Average daily volume.
         coefficient: Impact coefficient.
-        volatility: Daily price volatility (if 0, uses coefficient alone).
+        volatility: Daily return volatility of the asset (required, > 0).
         exponent: Impact exponent (default 0.5 = square root).
+
+    Raises:
+        ValueError: ``adv`` or ``volatility`` is missing or not positive. A
+            missing volatility used to become 1.0 (100% a day), which made
+            the impact about 50 times too large for a typical stock.
     """
-    if adv < EPSILON:
-        return 0.0
-    sigma = volatility if volatility > EPSILON else 1.0
-    return coefficient * sigma * ((abs(notional) / adv) ** exponent) * 10000.0
+    _require_liquidity(adv, volatility, model="square-root")
+    return coefficient * float(volatility) * ((abs(notional) / adv) ** exponent) * 10000.0  # type: ignore[arg-type]
 
 
 def spread_cost(bid_ask_spread_bps: float) -> float:
@@ -359,6 +375,13 @@ def alpha_decay_capacity(
             f"holdings without a positive adv_usd: {no_adv}. Capacity cannot be estimated "
             "without each position's liquidity."
         )
+    no_vol = [h.get("symbol", f"holding {i}") for i, h in enumerate(holdings)
+              if not float(h.get("volatility") or 0.0) > 0]
+    if no_vol:
+        raise ValueError(
+            f"holdings without a positive daily volatility: {no_vol}. The square-root impact "
+            "model scales with it."
+        )
     if gross_alpha_bps <= 0 or annual_turnover <= 0 or not holdings:
         return CapacityEstimate(
             gross_alpha_bps=gross_alpha_bps, annual_turnover=annual_turnover,
@@ -445,39 +468,68 @@ def turnover_analysis(
     (``estimated_cost_usd``). Adding the per-trade bps directly would count
     a 0.01% top-up as heavily as a full position switch.
 
+    Without a cost model the cost is unknown: ``estimated_cost_bps`` and
+    ``estimated_cost_usd`` are ``None`` and ``per_asset_cost_bps`` is empty.
+
     Args:
         current_weights: ``{symbol: current_weight}``.
         target_weights: ``{symbol: target_weight}``.
         cost_model: Cost model for per-asset cost estimation.
-        adv: ``{symbol: average_daily_volume}`` (optional).
-        volatility: ``{symbol: daily_volatility}`` (optional).
+        adv: ``{symbol: average_daily_volume}``; required for every traded
+            symbol when *cost_model* is given.
+        volatility: ``{symbol: daily_volatility}``; required for every traded
+            symbol when the model is sqrt or Almgren-Chriss.
         portfolio_value: Total portfolio value for notional calculation.
+
+    Raises:
+        ValueError: a traded symbol has no ADV, or no volatility where the
+            model needs one, or a value that is not positive. These used to
+            be filled with 1% of the book and 2% a day.
     """
     all_symbols = set(current_weights.keys()) | set(target_weights.keys())
     per_asset_turn: Dict[str, float] = {}
-    per_asset_cost: Dict[str, float] = {}
 
     for sym in all_symbols:
         curr = current_weights.get(sym, 0.0)
         tgt = target_weights.get(sym, 0.0)
-        turn = abs(tgt - curr)
-        per_asset_turn[sym] = round(turn, 6)
-
-        if cost_model and turn > EPSILON:
-            notional = turn * portfolio_value
-            sym_adv = (adv or {}).get(sym, portfolio_value * 0.01)
-            sym_vol = (volatility or {}).get(sym, 0.02)
-            per_asset_cost[sym] = round(cost_model.estimate(notional, sym_adv, sym_vol), 4)
-        else:
-            per_asset_cost[sym] = 0.0
+        per_asset_turn[sym] = round(abs(tgt - curr), 6)
 
     one_way = sum(per_asset_turn.values()) / 2.0
     two_way = sum(per_asset_turn.values())
-    # bps of the book: each trade's bps weighted by the share of the book it trades.
-    book_cost_bps = sum(
-        abs(target_weights.get(sym, 0.0) - current_weights.get(sym, 0.0)) * per_asset_cost[sym]
-        for sym in all_symbols
-    )
+    if cost_model is None:
+        return TurnoverResult(
+            one_way_turnover=round(one_way, 6),
+            two_way_turnover=round(two_way, 6),
+            per_asset_turnover=per_asset_turn,
+        )
+
+    traded = sorted(s for s in all_symbols
+                    if abs(target_weights.get(s, 0.0) - current_weights.get(s, 0.0)) > EPSILON)
+    adv_map = adv or {}
+    vol_map = volatility or {}
+
+    def _bad(value: Optional[float]) -> bool:
+        return value is None or not (value == value and value > 0)
+
+    no_adv = [s for s in traded if _bad(adv_map.get(s))]
+    needs_vol = cost_model.impact_model in ("sqrt", "almgren_chriss")
+    no_vol = [s for s in traded if needs_vol and _bad(vol_map.get(s))]
+    if no_adv or no_vol:
+        parts = []
+        if no_adv:
+            parts.append(f"no positive ADV for {no_adv}")
+        if no_vol:
+            parts.append(f"no positive daily volatility for {no_vol}")
+        raise ValueError("turnover_analysis: " + "; ".join(parts) + " (needed to cost the trades)")
+
+    per_asset_cost: Dict[str, float] = {}
+    book_cost_bps = 0.0
+    for sym in traded:
+        dw = abs(target_weights.get(sym, 0.0) - current_weights.get(sym, 0.0))
+        cost_bps = cost_model.estimate(dw * portfolio_value, adv_map[sym], vol_map.get(sym, 0.0))
+        per_asset_cost[sym] = round(cost_bps, 4)
+        # bps of the book: each trade's bps weighted by the share of the book it trades.
+        book_cost_bps += dw * cost_bps
 
     return TurnoverResult(
         one_way_turnover=round(one_way, 6),

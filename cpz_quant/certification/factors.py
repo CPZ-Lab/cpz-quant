@@ -13,7 +13,7 @@ Needs a factor-returns dataset, so it lives in the SDK / backtest engine.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, Mapping, Sequence
+from typing import Dict, Mapping, Optional, Sequence
 
 import numpy as np
 
@@ -24,19 +24,26 @@ TRADING_DAYS = 252.0
 class FactorAttribution:
     """OLS factor attribution.
 
-    ``alpha_tstat``, the beta t-stats and ``idiosyncratic_sharpe`` are NaN
-    when the factors explain the returns exactly (residuals at floating-point
-    noise): each would be rounding error divided by rounding error.
+    ``alpha_tstat``, the beta t-stats and ``idiosyncratic_sharpe`` are
+    ``None`` when the factors explain the returns exactly (residuals at
+    floating-point noise): each would be rounding error divided by rounding
+    error.
     """
     alpha_daily: float
     alpha_annualized: float
-    alpha_tstat: float
+    alpha_tstat: Optional[float]
     betas: Dict[str, float]
-    beta_tstats: Dict[str, float]
+    beta_tstats: Dict[str, Optional[float]]
     r_squared: float
-    idiosyncratic_sharpe: float   # annualized Sharpe of the residual (unexplained) return
+    idiosyncratic_sharpe: Optional[float]   # annualized Sharpe of the residual (unexplained) return
     explained_fraction: float     # share of return variance explained by the factors
     observations: int = field(default=0)
+
+
+def _stat(value: float, digits: int) -> Optional[float]:
+    """Rounded statistic, or ``None`` when it is undefined (NaN is not valid JSON)."""
+    v = float(value)
+    return round(v, digits) if np.isfinite(v) else None
 
 
 def factor_attribution(
@@ -103,11 +110,11 @@ def factor_attribution(
     return FactorAttribution(
         alpha_daily=round(alpha_daily, 6),
         alpha_annualized=round(alpha_daily * TRADING_DAYS, 4),
-        alpha_tstat=round(float(tstats[0]), 3),  # NaN survives round()
+        alpha_tstat=_stat(tstats[0], 3),
         betas={n: round(float(b), 4) for n, b in zip(names, beta[1:])},
-        beta_tstats={n: round(float(t), 3) for n, t in zip(names, tstats[1:])},
+        beta_tstats={n: _stat(t, 3) for n, t in zip(names, tstats[1:])},
         r_squared=round(float(r2), 4),
-        idiosyncratic_sharpe=round(float(idio_sharpe), 3),
+        idiosyncratic_sharpe=_stat(idio_sharpe, 3),
         explained_fraction=round(float(max(0.0, min(1.0, r2))), 4),
         observations=int(T),
     )

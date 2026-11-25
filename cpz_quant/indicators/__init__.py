@@ -2118,8 +2118,17 @@ class _CallableIndicatorModule(types.ModuleType):
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         return _momentum_indicator(*args, **kwargs)
 
+    def __reduce__(self) -> Any:
+        # Pickles by name (for multiprocessing and caches): unpickling imports it.
+        return (importlib.import_module, (self.__name__,))
+
 
 _momentum_module = importlib.import_module(".momentum", __name__)
 _momentum_module.__class__ = _CallableIndicatorModule
+_momentum_module.__doc__ = (
+    f"{_momentum_indicator.__doc__}\n\n"
+    "Calling ``momentum(bars, period)`` computes the indicator above. As a module it "
+    f"also holds the momentum-family kernels:\n\n{_momentum_module.__doc__}"
+)
 _momentum_module.__signature__ = inspect.signature(_momentum_indicator)  # type: ignore[attr-defined]
 globals()["momentum"] = _momentum_module

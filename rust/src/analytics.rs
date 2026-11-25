@@ -82,6 +82,68 @@ pub struct Analytics {
     pub crisis_benchmark_return: Option<f64>,
 }
 
+/// (max drawdown, ulcer index, longest run strictly below the peak).
+fn drawdown_geometry(eq: &[f64]) -> (f64, f64, i64) {
+    let mut peak = eq[0];
+    let mut max_dd = 0.0_f64;
+    let mut sum_sq_dd = 0.0_f64;
+    let mut cur_uw = 0_i64;
+    let mut max_uw = 0_i64;
+    for &e in eq {
+        if e > peak {
+            peak = e;
+            cur_uw = 0;
+        } else if e < peak {
+            cur_uw += 1;
+            if cur_uw > max_uw {
+                max_uw = cur_uw;
+            }
+        } else {
+            // Flat at the high-water mark: not under water.
+            cur_uw = 0;
+        }
+        let dd = if peak > 0.0 { e / peak - 1.0 } else { 0.0 };
+        if dd < max_dd {
+            max_dd = dd;
+        }
+        sum_sq_dd += (dd * 100.0).powi(2);
+    }
+    (max_dd, (sum_sq_dd / eq.len() as f64).sqrt(), max_uw)
+}
+
+/// A wiped-out curve too short for the statistics: the loss fields only.
+fn wiped_out_short(eq: &[f64]) -> Analytics {
+    let (max_dd, ulcer, max_uw) = drawdown_geometry(eq);
+    let n = to_returns(eq).len();
+    Analytics {
+        observations: n,
+        annualized_return: Some(-1.0),
+        annualized_vol: None,
+        sharpe: None,
+        sortino: None,
+        calmar: None,
+        max_drawdown: Some(max_dd),
+        ulcer_index: Some(ulcer),
+        max_time_under_water_days: Some(max_uw),
+        downside_deviation: None,
+        var95: None,
+        cvar95: None,
+        cvar99: None,
+        tail_ratio: None,
+        skew: None,
+        excess_kurtosis: None,
+        min_trl_years: None,
+        track_years: Some(n as f64 / TRADING_DAYS),
+        significant: None,
+        beta: None,
+        correlation: None,
+        up_capture: None,
+        down_capture: None,
+        crisis_return: None,
+        crisis_benchmark_return: None,
+    }
+}
+
 /// Per-period geometric mean return; -1 once the compounded value is gone.
 fn geometric_mean(rets: &[f64]) -> f64 {
     let growth: f64 = rets.iter().map(|r| 1.0 + r).product();
@@ -111,12 +173,13 @@ pub fn compute(equity: &[f64], benchmark: Option<&[f64]>) -> Option<Analytics> {
             }
         }
     }
-    if eq.len() < 30 {
-        return None;
-    }
     let rets = to_returns(&eq);
     let n = rets.len();
-    if n < 20 {
+    if eq.len() < 30 || n < 20 {
+        // Too short for statistics, but a wipe-out is still a total loss.
+        if eq.len() >= 2 && eq[eq.len() - 1] <= 0.0 {
+            return Some(wiped_out_short(&eq));
+        }
         return None;
     }
 
@@ -139,31 +202,7 @@ pub fn compute(equity: &[f64], benchmark: Option<&[f64]>) -> Option<Analytics> {
     let sortino = if down_dev > 0.0 { Some(mu / down_dev * TRADING_DAYS.sqrt()) } else { None };
 
     // Drawdown geometry.
-    let mut peak = eq[0];
-    let mut max_dd = 0.0_f64;
-    let mut sum_sq_dd = 0.0_f64;
-    let mut cur_uw = 0_i64;
-    let mut max_uw = 0_i64;
-    for &e in &eq {
-        if e > peak {
-            peak = e;
-            cur_uw = 0;
-        } else if e < peak {
-            cur_uw += 1;
-            if cur_uw > max_uw {
-                max_uw = cur_uw;
-            }
-        } else {
-            // Flat at the high-water mark: not under water.
-            cur_uw = 0;
-        }
-        let dd = if peak > 0.0 { e / peak - 1.0 } else { 0.0 };
-        if dd < max_dd {
-            max_dd = dd;
-        }
-        sum_sq_dd += (dd * 100.0).powi(2);
-    }
-    let ulcer = (sum_sq_dd / eq.len() as f64).sqrt();
+    let (max_dd, ulcer, max_uw) = drawdown_geometry(&eq);
     let calmar = if max_dd < 0.0 { Some(ann_return / max_dd.abs()) } else { None };
 
     // Tail risk.
@@ -423,6 +462,17 @@ mod tests {
         let a = compute(&equity_from_returns(&s_rets), Some(&equity_from_returns(&b_rets))).unwrap();
         assert!((a.up_capture.unwrap() - 2.0).abs() < 0.05);
         assert!((a.down_capture.unwrap() - 2.0).abs() < 0.05);
+    }
+
+    #[test]
+    fn short_wiped_out_curve_still_reports_total_loss() {
+        let mut eq = equity_from_returns(&vec![0.001; 10]);
+        eq.push(0.0);
+        let a = compute(&eq, None).unwrap();
+        assert_eq!(a.max_drawdown, Some(-1.0));
+        assert_eq!(a.annualized_return, Some(-1.0));
+        assert!(a.sharpe.is_none());
+        assert!(compute(&equity_from_returns(&vec![0.001; 10]), None).is_none());
     }
 
     #[test]

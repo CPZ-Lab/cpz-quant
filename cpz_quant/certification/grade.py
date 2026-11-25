@@ -123,28 +123,36 @@ def _flag(v) -> Optional[bool]:
 def _drawdown_pct(metrics: Optional[CertMetrics], analytics: Optional[RiskAnalytics]) -> Optional[float]:
     """``|max_drawdown|`` in percent, refusing a value that is evidently a fraction.
 
-    ``CertMetrics.max_drawdown`` is in percent. A magnitude below 1 is read as
-    under 1%, which a fraction from :func:`compute_risk_analytics` (``-0.62``
-    for 62%) would silently become. Such a value is accepted only when the
-    supplied analytics confirm it; otherwise it raises ``ValueError``.
+    ``CertMetrics.max_drawdown`` is in percent; :func:`compute_risk_analytics`
+    reports a fraction (``-0.62`` for 62%, ``-1.0`` for a wiped-out account).
+
+    - With *analytics*, a value that matches ``analytics.max_drawdown`` as a
+      fraction rather than as a percent raises, whatever its size (``-1.0``
+      for a wipe-out would otherwise read as 1%).
+    - A magnitude of 1 or less is accepted only when the analytics confirm
+      it as a percent; without them it raises.
     """
     dd = _finite(metrics.max_drawdown) if metrics else None
     if dd is None:
         return None
     abs_dd = abs(dd)
-    if 0 < abs_dd < 1:
-        a_dd = _finite(analytics.max_drawdown) if analytics is not None else None
-        confirmed = a_dd is not None and math.isclose(abs(a_dd) * 100, abs_dd, rel_tol=0.05, abs_tol=0.01)
-        if not confirmed:
-            hint = ""
-            if a_dd is not None and math.isclose(abs(a_dd), abs_dd, rel_tol=0.05, abs_tol=1e-4):
-                hint = f" It matches analytics.max_drawdown ({a_dd}), a fraction."
-            raise ValueError(
-                f"metrics.max_drawdown={dd} would be read as a {abs_dd:.2f}% drawdown. It is in "
-                "percent (-62.0 for a 62% drawdown); compute_risk_analytics() reports a fraction, "
-                f"so multiply it by 100.{hint} To certify a drawdown under 1%, pass analytics= so "
-                "the value can be confirmed."
-            )
+    a_dd = _finite(analytics.max_drawdown) if analytics is not None else None
+    as_pct = a_dd is not None and math.isclose(abs(a_dd) * 100, abs_dd, rel_tol=0.05, abs_tol=0.01)
+    as_fraction = (a_dd is not None and a_dd != 0
+                   and math.isclose(abs(a_dd), abs_dd, rel_tol=0.05, abs_tol=1e-4))
+    if a_dd is not None and as_fraction and not as_pct:
+        raise ValueError(
+            f"metrics.max_drawdown={dd} equals analytics.max_drawdown ({a_dd}), which is a "
+            f"fraction, so it would be read as a {abs_dd:.2f}% drawdown. It is in percent: pass "
+            f"{a_dd * 100:.4g} (analytics.max_drawdown * 100)."
+        )
+    if 0 < abs_dd <= 1 and not as_pct:
+        raise ValueError(
+            f"metrics.max_drawdown={dd} would be read as a {abs_dd:.2f}% drawdown. It is in "
+            "percent (-62.0 for a 62% drawdown, -100.0 for a wipe-out); compute_risk_analytics() "
+            "reports a fraction, so multiply it by 100. To certify a drawdown of 1% or less, "
+            "pass analytics= so the value can be confirmed."
+        )
     return abs_dd
 
 

@@ -24,6 +24,8 @@ from typing import List, Optional, Sequence
 
 import numpy as np
 
+from .analytics import _until_wipeout
+
 TRADING_DAYS = 252.0
 
 
@@ -94,8 +96,11 @@ def regime_conditional_performance(
 
     Returns ``None`` when the series is too short.
     """
-    eq = np.asarray(equity, dtype=float)
-    eq = eq[np.isfinite(eq) & (eq > 0)]
+    # A value at or below zero is a wiped-out account: the curve ends there
+    # and the loss counts (as in compute_risk_analytics), never dropped.
+    eq_raw = _until_wipeout(np.asarray(equity, dtype=float))
+    keep = np.isfinite(eq_raw)
+    eq = eq_raw[keep]
     if eq.size < max(vol_window + 20, 40):
         return None
     rets = _to_returns(eq)
@@ -132,8 +137,7 @@ def regime_conditional_performance(
 
     # ── Trend regimes: benchmark above/below its rolling mean ────────────────
     if benchmark is not None and len(benchmark) == len(equity):
-        bench = np.asarray(benchmark, dtype=float)
-        bench = bench[np.isfinite(np.asarray(equity, dtype=float)) & (np.asarray(equity, dtype=float) > 0)]
+        bench = np.asarray(benchmark, dtype=float)[: eq_raw.size][keep]
         if bench.size == eq.size and np.all(bench > 0):
             # Return day i (eq[i] / eq[i-1]) is bull when the benchmark's close at
             # i-1 is at or above its moving average ending at i-1: both known

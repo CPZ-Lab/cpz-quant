@@ -4,6 +4,40 @@ All notable changes to cpz-quant are documented here. The format follows [Keep a
 
 ## [Unreleased]
 
+### Changed (may break callers)
+
+- Scalar indicator calls on an empty input raise `ValueError` (they returned
+  0.0). A NaN latest value is returned as NaN with a `RuntimeWarning`
+  instead of the last value before it.
+- After one missing bar, EMA, DEMA, TEMA, MACD, RSI, ATR, ADX, Supertrend,
+  OBV and the other recursive indicators stay NaN for the rest of the
+  series (as TA-Lib); window indicators recover once the gap leaves the
+  window. Callers that read `ind.atr(...)` as a size input get NaN on data
+  with one null high: cpz-ai (cpz-py) `atr_size` needs an `isfinite` guard.
+- A NaN inside a window gives NaN in CCI, z-scores, ROC, momentum, STC, MFI,
+  Williams %R, stochastic, Fisher, ADX and the regression R-squared (they
+  used to read 0, 50, -50 or 0.5). Flat prices give NaN in RSI, MFI, the
+  Ultimate Oscillator, fast stochastic and Williams %R.
+- `certify` raises when `max_drawdown` looks like a fraction: a magnitude of
+  1 or less without `analytics=` confirming it, or a value equal to
+  `analytics.max_drawdown` (including -1.0 for a wipe-out).
+- `turnover_analysis.estimated_cost_bps` is 30 to 100 times smaller for
+  partial rebalances (it is now bps of the book). Without a cost model the
+  cost fields are `None`. With one, a traded symbol without ADV, or without
+  volatility for the sqrt and Almgren-Chriss models, raises (they were
+  filled with 1% of the book and 2% a day). `sqrt_impact`, `linear_impact`
+  and `almgren_chriss` raise on a missing ADV or volatility instead of using
+  a volatility of 1.0 or returning zero impact.
+- `hurst()` reads about 0.13 lower for the same series (bias removed); the
+  default `min_lag` is 10.
+- `fundamental_factors` needs market caps as series aligned with the returns,
+  or `caps_at_start=True` for single start-of-sample numbers; with momentum
+  it regresses only days from `momentum_window` on (`start_index`).
+- `alpha_decay_capacity`, `brinson_fachler` and `fundamental_factors` raise on
+  inputs they used to drop or default.
+- `factor_attribution` returns `None` for t-stats and the idiosyncratic
+  Sharpe of an exact fit.
+
 ### Fixed
 
 - Indicators: the scalar form returns the value at the latest bar. A missing
@@ -51,15 +85,17 @@ All notable changes to cpz-quant are documented here. The format follows [Keep a
 - Certification analytics: time under water counts only days below the
   peak; up/down capture use Morningstar's geometric per-period ratio;
   worst/best month run month-end to month-end; an equity value at or below
-  zero ends the curve as a total loss instead of being dropped. Rust
-  kernel updated to match.
+  zero ends the curve as a total loss instead of being dropped, also when
+  the curve is too short for the statistics. Rust kernel updated to match.
 - Regime breakdown labels each day from data known before it (trailing
-  volatility, previous benchmark close).
+  volatility, previous benchmark close) and counts a wipe-out.
 - `certify`: a missing beta or capacity scores the lowest band, never above a
   measured value; NumPy numbers and booleans are accepted; a
   `max_drawdown` that looks like a fraction raises (it is in percent).
-- `factor_attribution`: an exact factor fit gives NaN alpha t-stat and
+- `factor_attribution`: an exact factor fit gives `None` alpha t-stat and
   idiosyncratic Sharpe instead of rounding noise.
+- `momentum` (indicator and submodule) can be pickled and documents the
+  indicator; the NumPy SMA is O(n) again.
 
 ## [1.2.0] - 2026-09-17
 

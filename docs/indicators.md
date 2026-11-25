@@ -41,7 +41,7 @@ k, d = momentum.stochrsi_series(close)
 
 ## Conventions
 
-- Warm-up bars are NaN. Nothing is back-filled or fabricated; an undefined ratio (for example a Sortino ratio with no downside observations, or RSI on a price that has not moved) is NaN.
+- Warm-up bars are NaN. Nothing is back-filled or fabricated; an undefined ratio (for example a Sortino ratio with no downside observations, or RSI, MFI, the Ultimate Oscillator, fast stochastic and Williams %R on a price that has not moved) is NaN, and a NaN inside a window gives NaN rather than a placeholder such as 0 or 50.
 - The scalar form returns the value at the latest bar, never an older one. A missing bar (NaN) blanks the windows that contain it; for recursive smoothers (EMA and its family, MACD, RSI, ATR) every later value is NaN, as in TA-Lib. When the latest value is NaN the call warns (`RuntimeWarning`). An empty input raises `ValueError` in the scalar form.
 - An indicator of an indicator (an SMA of RSI, an RSI of an SMA) skips the input's NaN warm-up and starts when the input has values, as TA-Lib does.
 - Inputs: a polars or pandas DataFrame (columns by name), a polars or pandas Series, a 1-D NumPy array or a list. A 2-D array, a derived `source` (`hl2` and so on) on a single series, or `obv()` without a volume column raise instead of guessing.

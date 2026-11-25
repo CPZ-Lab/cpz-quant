@@ -320,6 +320,17 @@ def shift(values: np.ndarray, periods: int) -> np.ndarray:
     return out
 
 
+def ratio(num: float, den: float, fill: float) -> float:
+    """Scalar ``num / den``: NaN when either is NaN, *fill* only for a zero denominator.
+
+    The guard ``x / d if d > EPSILON else fill`` sends a NaN denominator
+    (a missing bar in the window) to *fill*, which reads as a real value.
+    """
+    if num != num or den != den:  # NaN in, NaN out
+        return float("nan")
+    return float(num / den) if abs(den) > EPSILON else fill
+
+
 def safe_divide(num: np.ndarray, den: np.ndarray, fill: float = np.nan) -> np.ndarray:
     """Element-wise ``num / den`` with *fill* where ``|den| <= EPSILON``.
 

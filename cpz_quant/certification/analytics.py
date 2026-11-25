@@ -115,39 +115,8 @@ def _geometric_mean(rets: np.ndarray) -> float:
     return growth ** (1.0 / rets.size) - 1.0 if growth > 0 else -1.0
 
 
-def _percentile(xs: np.ndarray, p: float) -> float:
-    # numpy 'linear' == the (n-1)*p interpolation used by the TS/Rust engines.
-    return float(np.percentile(xs, p * 100.0, method="linear"))
-
-
-def _compute_numpy(equity: Sequence[float], benchmark: Optional[Sequence[float]]) -> Optional[dict]:
-    eq_in = np.asarray(equity, dtype=float)
-    has_bench = benchmark is not None and len(benchmark) == len(eq_in)
-    bench_in = np.asarray(benchmark, dtype=float) if has_bench else None
-
-    eq_in = _until_wipeout(eq_in)
-    if bench_in is not None:
-        bench_in = bench_in[: eq_in.size]
-    keep = np.isfinite(eq_in)
-    eq = eq_in[keep]
-    bench = bench_in[keep] if has_bench else None  # type: ignore[index]
-    if eq.size < 30:
-        return None
-    rets = _to_returns(eq)
-    n = rets.size
-    if n < 20:
-        return None
-
-    mu = float(rets.mean())
-    sd = float(rets.std(ddof=1))
-    ann_return = float((eq[-1] / eq[0]) ** (TRADING_DAYS / n) - 1.0) if eq[-1] > 0 else -1.0
-    ann_vol = sd * np.sqrt(TRADING_DAYS)
-    sharpe = (mu / sd) * np.sqrt(TRADING_DAYS) if sd > 0 else None
-
-    downs = np.where(rets < 0, rets, 0.0)
-    down_dev = float(np.sqrt(np.mean(downs * downs)))
-    sortino = (mu / down_dev) * np.sqrt(TRADING_DAYS) if down_dev > 0 else None
-
+def _drawdown_geometry(eq: np.ndarray) -> tuple:
+    """(max drawdown, ulcer index, longest run strictly below the peak) of a curve."""
     peak = eq[0]
     max_dd = 0.0
     sum_sq_dd = 0.0
@@ -165,7 +134,52 @@ def _compute_numpy(equity: Sequence[float], benchmark: Optional[Sequence[float]]
         dd = (e / peak - 1.0) if peak > 0 else 0.0
         max_dd = min(max_dd, dd)
         sum_sq_dd += (dd * 100.0) ** 2
-    ulcer = float(np.sqrt(sum_sq_dd / eq.size))
+    return max_dd, float(np.sqrt(sum_sq_dd / eq.size)), max_uw
+
+
+def _wiped_out_short(eq: np.ndarray) -> dict:
+    """A wiped-out curve too short for the statistics: report the loss, nothing else."""
+    max_dd, ulcer, max_uw = _drawdown_geometry(eq)
+    n = _to_returns(eq).size
+    out: dict = {k: None for k in RiskAnalytics.__dataclass_fields__ if k not in ("worst_month", "best_month")}
+    out.update(observations=int(n), annualized_return=-1.0, max_drawdown=max_dd,
+               ulcer_index=ulcer, max_time_under_water_days=int(max_uw), track_years=n / TRADING_DAYS)
+    return out
+
+
+def _percentile(xs: np.ndarray, p: float) -> float:
+    # numpy 'linear' == the (n-1)*p interpolation used by the TS/Rust engines.
+    return float(np.percentile(xs, p * 100.0, method="linear"))
+
+
+def _compute_numpy(equity: Sequence[float], benchmark: Optional[Sequence[float]]) -> Optional[dict]:
+    eq_in = np.asarray(equity, dtype=float)
+    has_bench = benchmark is not None and len(benchmark) == len(eq_in)
+    bench_in = np.asarray(benchmark, dtype=float) if has_bench else None
+
+    eq_in = _until_wipeout(eq_in)
+    if bench_in is not None:
+        bench_in = bench_in[: eq_in.size]
+    keep = np.isfinite(eq_in)
+    eq = eq_in[keep]
+    bench = bench_in[keep] if has_bench else None  # type: ignore[index]
+    if eq.size < 30 or _to_returns(eq).size < 20:
+        # Too short for statistics, but a wipe-out is still a total loss.
+        return _wiped_out_short(eq) if eq.size >= 2 and eq[-1] <= 0 else None
+    rets = _to_returns(eq)
+    n = rets.size
+
+    mu = float(rets.mean())
+    sd = float(rets.std(ddof=1))
+    ann_return = float((eq[-1] / eq[0]) ** (TRADING_DAYS / n) - 1.0) if eq[-1] > 0 else -1.0
+    ann_vol = sd * np.sqrt(TRADING_DAYS)
+    sharpe = (mu / sd) * np.sqrt(TRADING_DAYS) if sd > 0 else None
+
+    downs = np.where(rets < 0, rets, 0.0)
+    down_dev = float(np.sqrt(np.mean(downs * downs)))
+    sortino = (mu / down_dev) * np.sqrt(TRADING_DAYS) if down_dev > 0 else None
+
+    max_dd, ulcer, max_uw = _drawdown_geometry(eq)
     calmar = (ann_return / abs(max_dd)) if max_dd < 0 else None
 
     var95 = _percentile(rets, 0.05)
@@ -321,7 +335,10 @@ def compute_risk_analytics(
         benchmark: optional aligned benchmark equity series (same length).
         dates: optional aligned ``YYYY-MM-DD`` strings (enables worst/best month).
 
-    Returns ``None`` when the series is too short to be meaningful.
+    Returns ``None`` when the series is too short to be meaningful, except
+    for a wiped-out curve: then only the loss fields are filled
+    (``annualized_return`` -1, ``max_drawdown``, ``ulcer_index``, time under
+    water, ``track_years``) and the statistics are ``None``.
     """
     raw: Optional[dict]
     if _RUST:

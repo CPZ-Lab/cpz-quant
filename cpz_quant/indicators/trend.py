@@ -18,6 +18,7 @@ from ._helpers import (
     _rolling_view,
     ema_sma_seed,
     first_valid_index,
+    ratio,
     rolling_apply,
     safe_divide,
     shift,
@@ -34,10 +35,20 @@ def sma_series(close: np.ndarray, period: int) -> np.ndarray:
     delays the first value; a missing bar only blanks the windows that
     contain it, so the latest value is never computed from stale data.
     """
-    n = len(close)
-    if period < 1:
-        return np.full(n, np.nan)
-    return rolling_apply(np.asarray(close, dtype=np.float64), period, "mean")
+    x = np.asarray(close, dtype=np.float64)
+    n = len(x)
+    out = np.full(n, np.nan)
+    if period < 1 or n < period:
+        return out
+    # O(n): running sums of the values (non-finite ones as 0) and of the
+    # count of non-finite values; a window is valid when that count is 0.
+    bad = ~np.isfinite(x)
+    sums = np.concatenate(([0.0], np.cumsum(np.where(bad, 0.0, x))))
+    counts = np.concatenate(([0], np.cumsum(bad)))
+    window_sum = sums[period:] - sums[:-period]
+    window_bad = counts[period:] - counts[:-period]
+    out[period - 1 :] = np.where(window_bad == 0, window_sum / period, np.nan)
+    return out
 
 
 # ── EMA ──────────────────────────────────────────────────────────────
@@ -164,7 +175,7 @@ def kama_series(
     for i in range(period, n):
         direction = abs(close[i] - close[i - period])
         volatility = np.sum(np.abs(np.diff(close[i - period : i + 1])))
-        er = direction / volatility if volatility > EPSILON else 0.0
+        er = ratio(direction, volatility, 0.0)
         sc = (er * (fast_sc - slow_sc) + slow_sc) ** 2
         out[i] = out[i - 1] + sc * (close[i] - out[i - 1])
     return out
@@ -406,8 +417,8 @@ def mcginley_series(close: np.ndarray, period: int = 10, *, k: float = 0.6) -> n
     out[0] = prev
     denom_base = k * period
     for i in range(1, n):
-        ratio = close[i] / prev if abs(prev) > EPSILON else np.nan
-        prev = prev + (close[i] - prev) / (denom_base * ratio**4)
+        rel = close[i] / prev if abs(prev) > EPSILON else np.nan
+        prev = prev + (close[i] - prev) / (denom_base * rel**4)
         out[i] = prev
     return out
 
@@ -687,7 +698,8 @@ def stc_series(
     f1_prev = 0.0
     for i in range(start, n):
         rng = hi[i] - lo[i]
-        f1 = (macd[i] - lo[i]) / rng * 100.0 if rng > 0 else f1_prev
+        f1 = np.nan if np.isnan(rng) or np.isnan(macd[i]) else (
+            (macd[i] - lo[i]) / rng * 100.0 if rng > 0 else f1_prev)
         pf[i] = f1 if i == start else pf[i - 1] + factor * (f1 - pf[i - 1])
         f1_prev = f1
 
@@ -697,7 +709,8 @@ def stc_series(
     f2_prev = 0.0
     for i in range(start2, n):
         rng = hi2[i] - lo2[i]
-        f2 = (pf[i] - lo2[i]) / rng * 100.0 if rng > 0 else f2_prev
+        f2 = np.nan if np.isnan(rng) or np.isnan(pf[i]) else (
+            (pf[i] - lo2[i]) / rng * 100.0 if rng > 0 else f2_prev)
         out[i] = f2 if i == start2 else out[i - 1] + factor * (f2 - out[i - 1])
         f2_prev = f2
     return out

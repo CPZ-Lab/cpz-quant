@@ -115,6 +115,7 @@ def fundamental_factors(
     book_values: Optional[Dict[str, float]] = None,
     momentum_window: int = 252,
     momentum_skip: int = 21,
+    caps_at_start: bool = False,
     trading_days: int = TRADING_DAYS,
 ) -> FundFactorModel:
     """Cross-sectional fundamental factor model (Fama-MacBeth, point in time).
@@ -135,13 +136,16 @@ def fundamental_factors(
 
     Args:
         returns: ``{asset_id: [daily_returns]}`` mapping (aligned at the end).
-        market_caps: per asset either a time series aligned with *returns*
-            (the cap at the close of each day; day ``t`` uses day ``t - 1``)
-            or one number, the cap at the close *before the first return*.
-            A single number is rolled forward with the asset's own returns,
-            so the size exposure on day ``t`` only uses returns before ``t``.
-            Passing today's caps as the single number is look-ahead: they
-            already contain the sample's returns.
+        market_caps: per asset a time series aligned with *returns* (the
+            cap at the close of each day; day ``t`` uses day ``t - 1``), or,
+            with ``caps_at_start=True``, one number: the cap at the close
+            *before the first return*, rolled forward with the asset's own
+            returns so day ``t`` only uses returns before ``t``.
+        caps_at_start: confirm that single-number caps are start-of-sample
+            values. Without it a single number raises ``ValueError``: today's
+            caps (the usual snapshot) already contain the sample's returns,
+            and using them for every day shows size and value premia in pure
+            noise.
         book_values: ``{asset_id: book_value}`` (optional, enables value),
             held fixed over the sample.
         momentum_window: Look-back for momentum (days). Momentum is used
@@ -172,6 +176,15 @@ def fundamental_factors(
     missing_caps = [s for s in ids if s not in market_caps]
     if missing_caps:
         raise KeyError(f"market_caps missing for {missing_caps}")
+    single = [s for s in ids if np.ndim(market_caps[s]) == 0]
+    if single and not caps_at_start:
+        raise ValueError(
+            f"market_caps for {single[:5]}{' ...' if len(single) > 5 else ''} are single numbers. "
+            "Pass each cap as a series aligned with the returns, or pass caps_at_start=True if "
+            "the numbers are caps at the close before the first return. Today's caps already "
+            "contain the sample's returns and would put look-ahead into every day's size and "
+            "value exposure."
+        )
     # caps[t, i] = cap of asset i at the close of day t; row 0 is the close
     # before the first return, so day t's exposures read row t.
     caps = np.empty((t_len + 1, n))
