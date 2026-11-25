@@ -9,22 +9,22 @@ All allocators live in `cpz_quant.portfolio`, take `{asset_id: [returns]}`, and 
 | `mean_variance` | Minimum variance, optionally at an exact target return |
 | `min_variance` | Global minimum variance |
 | `max_sharpe` | Maximum Sharpe ratio |
-| `risk_parity` | Equal risk contribution (risk budgeting) |
+| `risk_parity` | Long-only equal risk contribution (risk budgeting), solved by coordinate descent |
 | `equal_weight` | 1/N benchmark |
-| `hierarchical_risk_parity` | HRP: correlation clustering + recursive bisection, no matrix inversion |
-| `hierarchical_equal_risk_contribution` | HERC: cluster tree with equal risk contribution across clusters |
-| `nested_clustered_optimization` | NCO: intra-cluster then inter-cluster optimization |
+| `hierarchical_risk_parity` | HRP (Lopez de Prado 2016): clustering + inverse-variance recursive bisection, no matrix inversion |
+| `hierarchical_equal_risk_contribution` | HERC (Raffinot 2018): splits follow the dendrogram down to K clusters |
+| `nested_clustered_optimization` | NCO: intra-cluster then inter-cluster optimization (max-Sharpe raises when no tangency portfolio exists) |
 | `schur_complementary_allocation` | Schur-complement-based allocation |
 | `black_litterman` | Equilibrium prior + investor views, posterior optimal weights |
-| `mean_cvar` | Minimise Conditional VaR on empirical scenarios (LP) |
+| `mean_cvar` | Minimise Conditional VaR on empirical scenarios (Rockafellar-Uryasev LP, HiGHS) |
 | `robust_mvo` | Robust mean-variance (scipy native) |
 | `max_diversification` | Maximise the diversification ratio |
 | `min_tracking_error` | Track a benchmark with minimum tracking error |
 | `turnover_penalized` | Mean-variance with turnover penalty against current weights |
-| `alpha_risk_cost_optimize` | Grinold-Kahn alpha-risk-cost with transfer coefficient |
-| `mean_risk_optimize` | Generic mean-risk optimizer over any of the 17 risk measures |
+| `alpha_risk_cost_optimize` | Grinold-Kahn alpha-risk-cost; costs priced per unit traded, Clarke-de Silva-Thorley transfer coefficient |
+| `mean_risk_optimize` | Generic mean-risk optimizer over any of the 17 risk measures (`max_return` needs `max_risk`) |
 | `qubo_portfolio_selection` | Binary asset selection as a QUBO problem |
-| `quantum_inspired_hrp` | HRP with QUBO-based cluster ordering |
+| `quantum_inspired_hrp` | HRP with a seriation order (spectral heuristic, exact, or QUBO) |
 
 The [convex backend](convex.md) adds `mean_variance_cvx`, `mean_cvar_cvx`, `robust_mean_variance_cvx`, and `cardinality_constrained_cvx`.
 
@@ -37,7 +37,13 @@ A positive `min_weight` still applies when `long_only=True`.
 Because net exposure is fixed at one, `max_net_exposure` below one is infeasible
 and raises. Sector, factor, turnover and tracking-error limits are not supported
 by these three functions and raise `NotImplementedError` when supplied.
-Other allocators have different constraint support; consult their APIs.
+`mean_cvar`, `robust_mvo`, `max_diversification`, `min_tracking_error`,
+`turnover_penalized` and `alpha_risk_cost_optimize` enforce the same limits
+the same way; the last two also enforce `max_turnover` against the current
+weights. When every lower bound is non-negative, full investment already fixes
+gross exposure at one, so a gross cap of one or more does not change the
+answer. The cvxpy optimizers also raise on sector, factor and tracking-error
+limits.
 
 These core optimizers raise on failed solvers or invalid returned weights.
 They retain solver precision in `weights` to avoid rounding away tight limits;
@@ -57,13 +63,19 @@ with fewer than two observations instead of replacing them with zeros.
 | Function | Estimator |
 |---|---|
 | `sample_cov` | Sample covariance |
-| `ewma_cov` | Exponentially weighted |
-| `ledoit_wolf` | Ledoit-Wolf shrinkage to constant correlation |
-| `oracle_approximating` | Oracle Approximating Shrinkage |
+| `ewma_cov` | Exponentially weighted, normalised weights (pandas `ewm(...).cov(bias=True)`) |
+| `ledoit_wolf` | Ledoit-Wolf shrinkage with the published intensity per target (constant correlation, single factor, identity) |
+| `oracle_approximating` | Oracle Approximating Shrinkage (Chen et al. 2010, as in scikit-learn) |
 | `factor_model_cov` | Factor-model covariance |
-| `denoise_mp` | Marchenko-Pastur random-matrix denoising |
+| `denoise_mp` | Marchenko-Pastur denoising, constant residual eigenvalue method (Lopez de Prado 2020) |
 | `detone_cov` | Remove the market mode (detoning) |
-| `gerber_cov` | Gerber statistic (threshold co-movement) |
+| `gerber_cov` | Gerber statistic (Gerber et al. 2021), positive semidefinite |
+
+The estimators, copulas and pre-selection filters raise on a missing or
+non-finite return instead of estimating from it; drop or fill blanks first
+(for example `frame.dropna()`), or pass the returns through
+`select_complete_assets`, which drops assets with short histories and returns
+the rest on their common complete window.
 
 ## Views and priors
 

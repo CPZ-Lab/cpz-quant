@@ -32,9 +32,11 @@ from cpz_quant.frames import frame_friendly
 
 from .optimization import (
     EPSILON,
+    TRADING_DAYS,
     Constraints,
     OptResult,
     _build_matrices,
+    _check_limits,
     _metrics,
 )
 
@@ -63,13 +65,21 @@ def _base_constraints(
     w: "cp.Variable",
     constraints: Optional[Constraints],
     prev_weights: Optional[np.ndarray],
+    label: str,
 ) -> "List[Any]":
+    """Full investment, bounds, gross exposure and turnover as hard constraints.
+
+    Sector limits, factor limits and a tracking-error limit need data that
+    :class:`Constraints` does not carry (a sector map, factor loadings,
+    benchmark weights), so they raise ``NotImplementedError`` rather than
+    being dropped, exactly as in the native optimizers.
+    """
     c = constraints or Constraints()
+    _check_limits(c, label, allow_turnover=True)
     cons: List[Any] = [cp.sum(w) == 1]
-    if c.long_only:
-        cons.append(w >= 0)
-    else:
-        cons.append(w >= c.min_weight)
+    # Same effective floor as the native optimizers: a positive min_weight
+    # still applies when long_only=True.
+    cons.append(w >= (max(0.0, c.min_weight) if c.long_only else c.min_weight))
     cons.append(w <= c.max_weight)
     if c.max_gross_exposure is not None:
         cons.append(cp.norm1(w) <= c.max_gross_exposure)
@@ -123,7 +133,7 @@ def mean_variance_cvx(
     n = len(ids)
     w = cp.Variable(n)
     prev = _prev_vector(ids, prev_weights)
-    cons = _base_constraints(w, constraints, prev)
+    cons = _base_constraints(w, constraints, prev, "mean_variance_cvx")
     risk = cp.quad_form(w, cp.psd_wrap(cov))
     objective: Any
     if target_return is not None:
@@ -163,14 +173,13 @@ def mean_cvar_cvx(
     min_len = min(len(returns[i]) for i in ids)
     R = np.column_stack(
         [np.array(returns[i][-min_len:], dtype=np.float64) for i in ids]
-    )
-    R = np.nan_to_num(R, nan=0.0, posinf=0.0, neginf=0.0)
+    )  # finite: _build_matrices rejected missing or non-finite returns
     n_scen, n = R.shape
     w = cp.Variable(n)
     zeta = cp.Variable()  # VaR level
     z = cp.Variable(n_scen, nonneg=True)  # scenario excess losses
     prev = _prev_vector(ids, prev_weights)
-    cons = _base_constraints(w, constraints, prev)
+    cons = _base_constraints(w, constraints, prev, "mean_cvar_cvx")
     cons.append(z >= -R @ w - zeta)
     if target_return is not None:
         cons.append(mu @ w >= target_return)
@@ -205,23 +214,31 @@ def robust_mean_variance_cvx(
     worst-case expected return inside the set:
 
     - ``"ellipsoidal"``: worst case over ``{m : ||S^-1/2 (m - mu)|| <= kappa}``
-      where ``S`` is the estimation-error covariance ``cov / T``. Yields the
-      second-order-cone penalty ``kappa * ||S^1/2 w||``.
-    - ``"box"``: worst case over per-asset intervals ``mu_i ± kappa * se_i``
-      (``se`` = standard error of the mean). Yields ``kappa * se @ |w|``.
+      where ``S`` is the estimation-error covariance of the annualised mean.
+      Yields the second-order-cone penalty ``kappa * ||S^1/2 w||``.
+    - ``"box"``: worst case over per-asset intervals ``mu_i +/- kappa * se_i``
+      (``se`` = standard error of the annualised mean). Yields ``kappa * se @ |w|``.
+
+    ``mu`` is the daily mean times 252 and ``cov`` the daily covariance times
+    252, so ``S = 252^2 * cov_daily / T = 252 * cov / T``: with ``kappa = 1``
+    the penalty is one standard error of the portfolio's annualised mean
+    return, ``252 * sd(daily portfolio return) / sqrt(T)``.
 
     *kappa* scales the set (0 recovers plain mean-variance; 1-2 is typical).
     """
     _require_cvxpy()
     if uncertainty not in ("ellipsoidal", "box"):
         raise ValueError(f"uncertainty must be 'ellipsoidal' or 'box', got {uncertainty!r}")
+    if not np.isfinite(kappa) or kappa < 0:
+        raise ValueError(f"kappa must be finite and >= 0, got {kappa}")
     ids, mu, cov = _build_matrices(returns, risk_free_rate)
     n = len(ids)
     n_obs = min(len(returns[i]) for i in ids)
     w = cp.Variable(n)
     prev = _prev_vector(ids, prev_weights)
-    cons = _base_constraints(w, constraints, prev)
-    est_cov = cov / max(n_obs, 1)
+    cons = _base_constraints(w, constraints, prev, "robust_mean_variance_cvx")
+    # Covariance of the annualised mean estimate (mu = 252 * daily mean).
+    est_cov = cov * TRADING_DAYS / n_obs
     if uncertainty == "ellipsoidal":
         # sqrtm via eigendecomposition; est_cov is symmetric PSD.
         vals, vecs = np.linalg.eigh(est_cov)
@@ -286,6 +303,16 @@ def cardinality_constrained_cvx(
     if not 1 <= max_assets <= n:
         raise ValueError(f"max_assets must be in [1, {n}], got {max_assets}")
     c = constraints or Constraints()
+    for name in ("sector_limits", "factor_limits", "max_turnover", "max_tracking_error"):
+        if getattr(c, name) is not None:
+            raise NotImplementedError(
+                f"cardinality_constrained_cvx: {name} is not supported by this optimizer"
+            )
+    if c.min_weight > 0:
+        raise ValueError(
+            "cardinality_constrained_cvx: a positive min_weight would force every asset "
+            "into the portfolio; use min_position for the floor of selected names"
+        )
     max_w = min(c.max_weight, 1.0)
     if min_position > max_w:
         raise ValueError(f"min_position {min_position} exceeds max_weight {max_w}")
