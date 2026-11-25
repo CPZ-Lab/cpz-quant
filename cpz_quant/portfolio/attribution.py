@@ -41,6 +41,14 @@ class RiskAttrResult(BaseModel):
 
 
 class AlphaBetaResult(BaseModel):
+    """CAPM decomposition.
+
+    ``alpha`` is the beta-adjusted intercept. ``tracking_error`` is the
+    volatility of the active return (portfolio minus benchmark) and
+    ``information_ratio`` is the mean active return over that tracking
+    error, both annualised when requested, so the two always share the
+    same active-return definition.
+    """
     alpha: float = 0.0
     beta: float = 0.0
     tracking_error: float = 0.0
@@ -66,7 +74,26 @@ def brinson_fachler(
         benchmark_weights: ``{asset: weight}`` in benchmark.
         benchmark_returns: ``{asset: period_return}`` in benchmark.
         sectors: ``{asset: sector_name}`` mapping.
+
+    Every held asset (non-zero weight) must be in *sectors* and have a
+    return; otherwise ``ValueError``. Dropping an unmapped holding would
+    silently remove its contribution from the active return. A sector's
+    return is its weighted mean return, which is defined for a net-short
+    sector too; a sector whose holdings net to zero weight but still
+    contribute return has no defined sector return and raises.
     """
+    for label, weights, rets in (
+        ("portfolio", portfolio_weights, portfolio_returns),
+        ("benchmark", benchmark_weights, benchmark_returns),
+    ):
+        held = [a for a, w in weights.items() if w != 0]
+        unmapped = sorted(a for a in held if a not in sectors)
+        if unmapped:
+            raise ValueError(f"{label} holdings missing from the sector map: {unmapped}")
+        no_return = sorted(a for a in held if a not in rets)
+        if no_return:
+            raise ValueError(f"{label} holdings without a return: {no_return}")
+
     all_sectors = set(sectors.values())
 
     sector_pw: Dict[str, float] = {}
@@ -83,14 +110,18 @@ def brinson_fachler(
 
         sector_pw[sec] = pw
         sector_bw[sec] = bw
-        sector_pr[sec] = (
-            sum(portfolio_weights.get(a, 0) * portfolio_returns.get(a, 0) for a in p_assets) / max(pw, EPSILON)
-            if pw > EPSILON else 0.0
-        )
-        sector_br[sec] = (
-            sum(benchmark_weights.get(a, 0) * benchmark_returns.get(a, 0) for a in b_assets) / max(bw, EPSILON)
-            if bw > EPSILON else 0.0
-        )
+        p_contrib = sum(portfolio_weights[a] * portfolio_returns.get(a, 0.0) for a in p_assets)
+        b_contrib = sum(benchmark_weights[a] * benchmark_returns.get(a, 0.0) for a in b_assets)
+        for label, w_sum, contrib in (("portfolio", pw, p_contrib), ("benchmark", bw, b_contrib)):
+            if abs(w_sum) <= EPSILON and abs(contrib) > EPSILON:
+                raise ValueError(
+                    f"sector {sec!r}: {label} holdings net to zero weight but contribute "
+                    f"{contrib:.6g} of return, so the sector return is undefined; map the "
+                    "offsetting positions to separate sectors"
+                )
+        # Weighted mean return; defined for net-short sectors as well (sign of w cancels).
+        sector_pr[sec] = p_contrib / pw if abs(pw) > EPSILON else 0.0
+        sector_br[sec] = b_contrib / bw if abs(bw) > EPSILON else 0.0
 
     total_br = sum(sector_bw[s] * sector_br[s] for s in all_sectors)
 
@@ -229,9 +260,13 @@ def risk_attribution(
 
     per_factor: Dict[str, float] = {}
     if factor_names and factor_loadings is not None and factor_cov is not None:
-        Bw = factor_loadings.T @ w
+        # Euler split of w'BFB'w: factor j gets (B'w)_j * (F B'w)_j, which
+        # includes its covariance with the other factors, so the parts add
+        # up to factor_risk_pct (a part can be negative for a hedging factor).
+        Bw = np.asarray(factor_loadings).T @ w
+        FBw = np.asarray(factor_cov) @ Bw
         for j, fname in enumerate(factor_names):
-            per_factor[fname] = round(float(Bw[j] ** 2 * factor_cov[j, j]) / max(total_var, EPSILON) * 100, 2)
+            per_factor[fname] = round(float(Bw[j] * FBw[j]) / max(total_var, EPSILON) * 100, 2)
 
     return RiskAttrResult(
         total_risk=round(total_risk * 100, 4),
@@ -277,7 +312,11 @@ def alpha_beta_decomposition(
     scale = math.sqrt(trading_days) if annualize else 1.0
     alpha_ann = alpha_daily * (trading_days if annualize else 1.0)
     te_ann = te_daily * scale
-    ir = alpha_ann / max(te_ann, EPSILON) if te_ann > EPSILON else 0.0
+    # Information ratio: mean active return / tracking error of the same
+    # active return. Dividing the beta-adjusted alpha by the plain tracking
+    # error mixes two definitions and can flip the sign.
+    active_ann = float(np.mean(excess)) * (trading_days if annualize else 1.0)
+    ir = active_ann / te_ann if te_ann > EPSILON else 0.0
 
     return AlphaBetaResult(
         alpha=round(alpha_ann * 100, 4),
@@ -304,7 +343,8 @@ def rolling_attribution(
         trading_days: Trading days per year.
 
     Returns:
-        ``{"alpha": [...], "beta": [...], "ir": [...]}``
+        ``{"alpha": [...], "beta": [...], "ir": [...]}``. ``ir`` is the
+        annualised mean active return over tracking error in each window.
     """
     min_len = min(len(portfolio_returns), len(benchmark_returns))
     y = np.array(portfolio_returns[-min_len:], dtype=np.float64)
@@ -326,7 +366,8 @@ def rolling_attribution(
         excess = ywin - xwin
         te = float(np.std(excess, ddof=1)) * math.sqrt(trading_days)
         a_ann = a * trading_days
-        ir = a_ann / max(te, EPSILON)
+        # Same definition as alpha_beta_decomposition: mean active return / TE.
+        ir = float(np.mean(excess)) * trading_days / max(te, EPSILON)
 
         alphas.append(round(a_ann * 100, 4))
         betas.append(round(b, 4))

@@ -3,18 +3,24 @@
 Centralises array extraction, constants, and common operations
 so individual indicator modules stay focused on math.
 
-As of cpz-ai 4.x the DataFrame layer is polars-only. Inputs accept
-``pl.DataFrame``, ``pl.Series``, ``numpy.ndarray``, or plain ``list``.
+Inputs accept a polars or pandas ``DataFrame`` (columns picked by name),
+a polars or pandas ``Series``, a 1-D ``numpy.ndarray``, or a plain
+``list``. pandas is never imported: frames are recognised by type name.
 """
 
 from __future__ import annotations
 
-from typing import Optional, Tuple, Union
+from typing import Any, Optional, Tuple, Union
 
 import numpy as np
 import polars as pl
 
 # ── Constants ────────────────────────────────────────────────────────
+#
+# These are the defaults bound into function signatures when the module
+# is imported. They are not global settings: assigning a new value to
+# ``TRADING_DAYS_PER_YEAR`` after import changes nothing. Pass
+# ``trading_days=`` per call instead (for example 365 for crypto).
 
 EPSILON: float = 1e-15
 TRADING_DAYS_PER_YEAR: int = 252
@@ -34,34 +40,71 @@ PriceInput = Union[pl.DataFrame, pl.Series, np.ndarray, list]
 # ── Array extraction ─────────────────────────────────────────────────
 
 
-def ensure_array(data: PriceInput, col: Optional[str] = None) -> np.ndarray:
-    """Convert any supported input into a float64 numpy array.
+def _is_pandas(data: Any, name: str) -> bool:
+    cls = type(data)
+    return cls.__module__.split(".")[0] == "pandas" and cls.__name__ == name
 
-    Accepts polars DataFrames/Series, numpy arrays, and plain lists.
+
+def is_frame(data: Any) -> bool:
+    """``True`` for a polars or pandas ``DataFrame``."""
+    return isinstance(data, pl.DataFrame) or _is_pandas(data, "DataFrame")
+
+
+def _series_to_numpy(s: Any) -> np.ndarray:
+    if isinstance(s, pl.Series):
+        return s.to_numpy().astype(np.float64)
+    # pandas Series: nullable dtypes carry pd.NA, which must become NaN.
+    return np.asarray(s.to_numpy(dtype=np.float64, na_value=np.nan), dtype=np.float64)
+
+
+def ensure_array(data: PriceInput, col: Optional[str] = None) -> np.ndarray:
+    """Convert any supported input into a 1-D float64 numpy array.
 
     Args:
-        data: DataFrame, Series, ndarray, or list of floats.
+        data: polars/pandas DataFrame or Series, 1-D ndarray, or list.
         col: Column name to extract when *data* is a DataFrame.
              Defaults to ``"close"`` when *col* is ``None`` and
              *data* is a DataFrame.
+
+    Raises:
+        KeyError: the DataFrame has no such column.
+        ValueError: the input is not one-dimensional (for example a 2-D
+            array of several columns), which would otherwise be read as
+            one long price series.
     """
-    if isinstance(data, pl.DataFrame):
-        col = col or DEFAULT_COL_CLOSE
-        if col not in data.columns:
-            raise KeyError(f"Column '{col}' not found. Available: {data.columns}")
-        return data[col].to_numpy().astype(np.float64)
-    if isinstance(data, pl.Series):
-        return data.to_numpy().astype(np.float64)
-    return np.asarray(data, dtype=np.float64)
+    if is_frame(data):
+        return _col_to_numpy(data, col or DEFAULT_COL_CLOSE)
+    if isinstance(data, pl.Series) or _is_pandas(data, "Series"):
+        return _series_to_numpy(data)
+    arr = np.asarray(data, dtype=np.float64)
+    if arr.ndim != 1:
+        raise ValueError(
+            f"expected a 1-D series of values, got an array of shape {arr.shape}; pass a "
+            f"DataFrame (the '{col or DEFAULT_COL_CLOSE}' column is used) or a single series"
+        )
+    return arr
 
 
-def _col_to_numpy(df: pl.DataFrame, col: str) -> np.ndarray:
-    """Extract a column as float64 numpy array from a polars DataFrame."""
-    return df[col].to_numpy().astype(np.float64)
+def _col_to_numpy(df: Any, col: str) -> np.ndarray:
+    """Extract a column of a polars or pandas DataFrame as float64."""
+    if col not in df.columns:
+        raise KeyError(f"Column '{col}' not found. Available: {list(df.columns)}")
+    return _series_to_numpy(df[col])
+
+
+def require_frame(bars: Any, fn: str, cols: Tuple[str, ...]) -> Any:
+    """Return *bars* when it is a DataFrame, else raise naming the columns needed."""
+    if not is_frame(bars):
+        who = f"{fn}()" if fn.isidentifier() else fn
+        raise TypeError(
+            f"{who} needs a polars or pandas DataFrame with columns {list(cols)}, "
+            f"got {type(bars).__name__}"
+        )
+    return bars
 
 
 def ensure_ohlcv(
-    bars: pl.DataFrame,
+    bars: Any,
     *,
     col_open: str = DEFAULT_COL_OPEN,
     col_high: str = DEFAULT_COL_HIGH,
@@ -69,50 +112,41 @@ def ensure_ohlcv(
     col_close: str = DEFAULT_COL_CLOSE,
     col_volume: str = DEFAULT_COL_VOLUME,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Extract OHLCV arrays from a polars DataFrame.
+    """Extract OHLCV arrays from a polars or pandas DataFrame.
 
     Column names are fully configurable so users with non-standard
     schemas don't have to rename anything.
     """
-    return (
-        _col_to_numpy(bars, col_open),
-        _col_to_numpy(bars, col_high),
-        _col_to_numpy(bars, col_low),
-        _col_to_numpy(bars, col_close),
-        _col_to_numpy(bars, col_volume),
-    )
+    cols = (col_open, col_high, col_low, col_close, col_volume)
+    require_frame(bars, "this indicator", cols)
+    return tuple(_col_to_numpy(bars, c) for c in cols)  # type: ignore[return-value]
 
 
 def ensure_ohlc(
-    bars: pl.DataFrame,
+    bars: Any,
     *,
     col_open: str = DEFAULT_COL_OPEN,
     col_high: str = DEFAULT_COL_HIGH,
     col_low: str = DEFAULT_COL_LOW,
     col_close: str = DEFAULT_COL_CLOSE,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Extract OHLC arrays (no volume) from a polars DataFrame."""
-    return (
-        _col_to_numpy(bars, col_open),
-        _col_to_numpy(bars, col_high),
-        _col_to_numpy(bars, col_low),
-        _col_to_numpy(bars, col_close),
-    )
+    """Extract OHLC arrays (no volume) from a polars or pandas DataFrame."""
+    cols = (col_open, col_high, col_low, col_close)
+    require_frame(bars, "this indicator", cols)
+    return tuple(_col_to_numpy(bars, c) for c in cols)  # type: ignore[return-value]
 
 
 def ensure_hlc(
-    bars: pl.DataFrame,
+    bars: Any,
     *,
     col_high: str = DEFAULT_COL_HIGH,
     col_low: str = DEFAULT_COL_LOW,
     col_close: str = DEFAULT_COL_CLOSE,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Extract High / Low / Close arrays from a polars DataFrame."""
-    return (
-        _col_to_numpy(bars, col_high),
-        _col_to_numpy(bars, col_low),
-        _col_to_numpy(bars, col_close),
-    )
+    """Extract High / Low / Close arrays from a polars or pandas DataFrame."""
+    cols = (col_high, col_low, col_close)
+    require_frame(bars, "this indicator", cols)
+    return tuple(_col_to_numpy(bars, c) for c in cols)  # type: ignore[return-value]
 
 
 # ── Smoothing primitives (reused across indicators) ─────────────────
@@ -121,17 +155,12 @@ def ensure_hlc(
 def wilder_smooth(values: np.ndarray, period: int) -> np.ndarray:
     """Wilder's smoothing (equivalent to EMA with alpha = 1/period).
 
-    Used by RSI, ATR, ADX, and other Wilder-family indicators.
+    Seeded with the mean of the first *period* valid values. A leading
+    NaN warm-up (an indicator of an indicator) is skipped; a NaN after
+    the seed makes every later value NaN rather than carrying an old one.
+    Used by ATR and other Wilder-family indicators.
     """
-    n = len(values)
-    out = np.full(n, np.nan)
-    if n < period:
-        return out
-    out[period - 1] = np.mean(values[:period])
-    alpha = 1.0 / period
-    for i in range(period, n):
-        out[i] = alpha * values[i] + (1.0 - alpha) * out[i - 1]
-    return out
+    return ema_sma_seed(values, period, alpha=1.0 / period)
 
 
 # ── Source price helpers ─────────────────────────────────────────────
@@ -148,7 +177,9 @@ def source_price(
 ) -> np.ndarray:
     """Compute a derived price source from OHLC data.
 
-    Accepts polars DataFrames, numpy arrays, or plain lists.
+    A derived source (anything but ``"close"``) needs a DataFrame with the
+    OHLC columns; on a single series it raises instead of silently using
+    that series.
 
     Supported *source* values:
         ``"close"``  — close price (default)
@@ -157,7 +188,12 @@ def source_price(
         ``"hlc3"``   — (high + low + close) / 3  (typical price)
         ``"ohlc4"``  — (open + high + low + close) / 4
     """
-    if not isinstance(bars, pl.DataFrame):
+    if not is_frame(bars):
+        if source != "close":
+            raise TypeError(
+                f"source='{source}' needs a DataFrame with OHLC columns; "
+                f"got {type(bars).__name__}"
+            )
         return ensure_array(bars)
 
     if source == "close":
@@ -282,6 +318,17 @@ def shift(values: np.ndarray, periods: int) -> np.ndarray:
     else:
         out[:periods] = values[-periods:]
     return out
+
+
+def ratio(num: float, den: float, fill: float) -> float:
+    """Scalar ``num / den``: NaN when either is NaN, *fill* only for a zero denominator.
+
+    The guard ``x / d if d > EPSILON else fill`` sends a NaN denominator
+    (a missing bar in the window) to *fill*, which reads as a real value.
+    """
+    if num != num or den != den:  # NaN in, NaN out
+        return float("nan")
+    return float(num / den) if abs(den) > EPSILON else fill
 
 
 def safe_divide(num: np.ndarray, den: np.ndarray, fill: float = np.nan) -> np.ndarray:

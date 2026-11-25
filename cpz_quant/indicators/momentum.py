@@ -14,10 +14,10 @@ from typing import Tuple
 import numpy as np
 
 from ._helpers import (
-    EPSILON,
     _rolling_view,
     ema_sma_seed,
     first_valid_index,
+    ratio,
     rolling_apply,
     safe_divide,
     shift,
@@ -32,7 +32,18 @@ def rsi_series(
     *,
     smoothing: str = "wilder",
 ) -> np.ndarray:
-    """Relative Strength Index.
+    """Relative Strength Index, ``100 * avg_gain / (avg_gain + avg_loss)``.
+
+    Matches TA-Lib ``RSI`` (Wilder smoothing seeded with the mean of the
+    first *period* changes), with two deliberate differences:
+
+    - When the averages are both exactly zero (no price change over the
+      whole seed and since), RSI is 0/0 and the value is NaN. TA-Lib
+      returns 0 there, which reads as deeply oversold on a flat price.
+    - A leading NaN warm-up (an RSI of an SMA) is skipped, so the first
+      value comes *period* bars after the input's first valid value. A NaN
+      after that makes the value and every later one NaN instead of
+      treating the missing bar as "no change".
 
     Args:
         close: Price array.
@@ -40,33 +51,35 @@ def rsi_series(
         smoothing: ``"wilder"`` (Wilder's smoothing, default) or ``"ema"``
                    (standard exponential smoothing).
     """
-    n = len(close)
-    out = np.full(n, np.nan)
-    if n < period + 1:
-        return out
-
-    deltas = np.diff(close)
-    gains = np.where(deltas > 0, deltas, 0.0)
-    losses = np.where(deltas < 0, -deltas, 0.0)
-
     if smoothing == "wilder":
-        avg_gain = np.mean(gains[:period])
-        avg_loss = np.mean(losses[:period])
-        out[period] = 100.0 - 100.0 / (1.0 + avg_gain / max(avg_loss, EPSILON))
         alpha = 1.0 / period
     elif smoothing == "ema":
-        avg_gain = np.mean(gains[:period])
-        avg_loss = np.mean(losses[:period])
-        out[period] = 100.0 - 100.0 / (1.0 + avg_gain / max(avg_loss, EPSILON))
         alpha = 2.0 / (period + 1)
     else:
         raise ValueError(f"Unknown smoothing '{smoothing}'. Use: wilder, ema")
 
+    close = np.asarray(close, dtype=np.float64)
+    n = len(close)
+    out = np.full(n, np.nan)
+    start = first_valid_index(close)
+    if n - start < period + 1:
+        return out
+
+    deltas = np.diff(close[start:])
+    gains = np.where(np.isnan(deltas), np.nan, np.maximum(deltas, 0.0))
+    losses = np.where(np.isnan(deltas), np.nan, np.maximum(-deltas, 0.0))
+
+    def value(g: float, loss: float) -> float:
+        den = g + loss
+        return 100.0 * g / den if den > 0.0 else np.nan
+
+    avg_gain = float(np.mean(gains[:period]))
+    avg_loss = float(np.mean(losses[:period]))
+    out[start + period] = value(avg_gain, avg_loss)
     for i in range(period, len(deltas)):
         avg_gain = alpha * gains[i] + (1.0 - alpha) * avg_gain
         avg_loss = alpha * losses[i] + (1.0 - alpha) * avg_loss
-        rs = avg_gain / max(avg_loss, EPSILON)
-        out[i + 1] = 100.0 - 100.0 / (1.0 + rs)
+        out[start + i + 1] = value(avg_gain, avg_loss)
 
     return out
 
@@ -80,6 +93,11 @@ def macd_series(
     signal_period: int = 9,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Moving Average Convergence Divergence.
+
+    The three averages are ``ema_series`` EMAs seeded with the first valid
+    value (no warm-up gap), not TA-Lib's simple-mean seed, so early values
+    differ from TA-Lib ``MACD`` (and from ``apo()``, which uses the TA-Lib
+    seed) until the seed has decayed; the signal line seeds the same way.
 
     Args:
         close: Price array.
@@ -126,16 +144,17 @@ def stochastic_series(
         highest = np.max(high[i - k_period + 1 : i + 1])
         lowest = np.min(low[i - k_period + 1 : i + 1])
         rng = highest - lowest
-        k[i] = ((close[i] - lowest) / rng * 100.0) if rng > EPSILON else 50.0
+        # A zero range (flat prices) is 0/0: NaN, not a made-up 50.
+        k[i] = ratio(close[i] - lowest, rng, np.nan) * 100.0
 
-    k_filled = np.nan_to_num(k, nan=50.0)
+    # %D averages real %K values only: the warm-up stays NaN instead of
+    # being filled with a made-up 50.
     if d_ma_type == "sma":
-        d = sma_series(k_filled, d_period)
+        d = sma_series(k, d_period)
     elif d_ma_type == "ema":
-        d = ema_series(k_filled, d_period)
+        d = ema_series(k, d_period)
     else:
         raise ValueError(f"Unknown d_ma_type '{d_ma_type}'. Use: sma, ema")
-    d[: k_period - 1] = np.nan
     return k, d
 
 
@@ -147,14 +166,14 @@ def williams_r_series(
     close: np.ndarray,
     period: int = 14,
 ) -> np.ndarray:
-    """Williams %R oscillator (range: -100 to 0)."""
+    """Williams %R oscillator (range: -100 to 0); NaN when the range is zero."""
     n = len(close)
     out = np.full(n, np.nan)
     for i in range(period - 1, n):
         highest = np.max(high[i - period + 1 : i + 1])
         lowest = np.min(low[i - period + 1 : i + 1])
         rng = highest - lowest
-        out[i] = ((highest - close[i]) / rng * -100.0) if rng > EPSILON else -50.0
+        out[i] = ratio(highest - close[i], rng, np.nan) * -100.0
     return out
 
 
@@ -183,7 +202,7 @@ def cci_series(
         mean_tp = np.mean(window)
         mean_dev = np.mean(np.abs(window - mean_tp))
         denom = constant * mean_dev
-        out[i] = (tp[i] - mean_tp) / denom if denom > EPSILON else 0.0
+        out[i] = ratio(tp[i] - mean_tp, denom, 0.0)
     return out
 
 
@@ -195,7 +214,7 @@ def roc_series(close: np.ndarray, period: int = 12) -> np.ndarray:
     out = np.full(n, np.nan)
     for i in range(period, n):
         prev = close[i - period]
-        out[i] = ((close[i] - prev) / prev * 100.0) if abs(prev) > EPSILON else 0.0
+        out[i] = ratio(close[i] - prev, prev, 0.0) * 100.0
     return out
 
 
@@ -207,7 +226,7 @@ def momentum_pct_series(close: np.ndarray, period: int = 20) -> np.ndarray:
     out = np.full(n, np.nan)
     for i in range(period, n):
         prev = close[i - period]
-        out[i] = ((close[i] / prev - 1.0) * 100.0) if abs(prev) > EPSILON else 0.0
+        out[i] = (ratio(close[i], prev, 1.0) - 1.0) * 100.0
     return out
 
 
@@ -232,6 +251,11 @@ def adx_series(
     for i in range(1, n):
         h_diff = high[i] - high[i - 1]
         l_diff = low[i - 1] - low[i]
+        if np.isnan(h_diff) or np.isnan(l_diff) or np.isnan(close[i - 1]):
+            # A missing bar: no range or move can be read, and the Wilder
+            # averages below stay NaN from here on.
+            tr[i] = plus_dm[i] = minus_dm[i] = np.nan
+            continue
         tr[i] = max(
             high[i] - low[i],
             abs(high[i] - close[i - 1]),
@@ -240,9 +264,9 @@ def adx_series(
         plus_dm[i] = h_diff if (h_diff > l_diff and h_diff > 0) else 0.0
         minus_dm[i] = l_diff if (l_diff > h_diff and l_diff > 0) else 0.0
 
-    smoothed_tr = np.mean(tr[1 : period + 1])
-    smoothed_plus = np.mean(plus_dm[1 : period + 1])
-    smoothed_minus = np.mean(minus_dm[1 : period + 1])
+    smoothed_tr = float(np.mean(tr[1 : period + 1]))
+    smoothed_plus = float(np.mean(plus_dm[1 : period + 1]))
+    smoothed_minus = float(np.mean(minus_dm[1 : period + 1]))
 
     dx_values: list[float] = []
 
@@ -252,10 +276,10 @@ def adx_series(
             smoothed_plus = (smoothed_plus * (period - 1) + plus_dm[i]) / period
             smoothed_minus = (smoothed_minus * (period - 1) + minus_dm[i]) / period
 
-        plus_di = (smoothed_plus / smoothed_tr * 100.0) if smoothed_tr > EPSILON else 0.0
-        minus_di = (smoothed_minus / smoothed_tr * 100.0) if smoothed_tr > EPSILON else 0.0
+        plus_di = ratio(smoothed_plus, smoothed_tr, 0.0) * 100.0
+        minus_di = ratio(smoothed_minus, smoothed_tr, 0.0) * 100.0
         di_sum = plus_di + minus_di
-        dx = (abs(plus_di - minus_di) / di_sum * 100.0) if di_sum > EPSILON else 0.0
+        dx = ratio(abs(plus_di - minus_di), di_sum, 0.0) * 100.0
         dx_values.append(dx)
 
         if len(dx_values) == period:
@@ -286,13 +310,19 @@ def mfi_series(
     for i in range(period, n):
         pos_flow = 0.0
         neg_flow = 0.0
+        missing = False
         for j in range(i - period + 1, i + 1):
+            if np.isnan(tp[j]) or np.isnan(tp[j - 1]) or np.isnan(raw_mf[j]):
+                missing = True
+                break
             if tp[j] > tp[j - 1]:
                 pos_flow += raw_mf[j]
             elif tp[j] < tp[j - 1]:
                 neg_flow += raw_mf[j]
-        mfr = pos_flow / max(neg_flow, EPSILON)
-        out[i] = 100.0 - 100.0 / (1.0 + mfr)
+        # 100 * pos / (pos + neg); a missing bar in the window or no price
+        # change at all (0/0) is NaN, not 0.
+        total = pos_flow + neg_flow
+        out[i] = np.nan if missing or total <= 0.0 else 100.0 * pos_flow / total
 
     return out
 
@@ -400,8 +430,9 @@ def cmo_series(close: np.ndarray, period: int = 14, *, smoothing: str = "sum") -
     if n < period + 1:
         return out
     delta = np.diff(close)
-    gains = np.where(delta > 0, delta, 0.0)
-    losses = np.where(delta < 0, -delta, 0.0)
+    # A missing close is a missing change, not a flat bar: keep it NaN.
+    gains = np.where(np.isnan(delta), np.nan, np.maximum(delta, 0.0))
+    losses = np.where(np.isnan(delta), np.nan, np.maximum(-delta, 0.0))
     if smoothing == "sum":
         up = rolling_apply(gains, period, "sum")
         down = rolling_apply(losses, period, "sum")
@@ -453,7 +484,8 @@ def ultosc_series(
 
     ``BP = close - min(low, prev_close)``, ``TR = max(high, prev_close) - min(low, prev_close)``;
     ``UO = 100 * (4*A1 + 2*A2 + A3) / 7`` with ``Ai = sum(BP)/sum(TR)`` over
-    each period (a zero TR sum contributes 0).
+    each period. A zero TR sum (flat prices) is 0/0 and gives NaN; TA-Lib
+    counts it as 0, which reads as deeply oversold.
     """
     n = len(close)
     bp = np.full(n, np.nan)
@@ -465,7 +497,7 @@ def ultosc_series(
         tr[1:] = true_high - true_low
 
     def avg(p: int) -> np.ndarray:
-        return safe_divide(rolling_apply(bp, p, "sum"), rolling_apply(tr, p, "sum"), fill=0.0)
+        return safe_divide(rolling_apply(bp, p, "sum"), rolling_apply(tr, p, "sum"), fill=np.nan)
 
     uo = 100.0 * (4.0 * avg(period1) + 2.0 * avg(period2) + avg(period3)) / 7.0
     uo[: max(period1, period2, period3)] = np.nan
@@ -653,7 +685,7 @@ def fisher_transform_series(
     f = 0.0
     for i in range(period - 1, n):
         rng = hh[i] - ll[i]
-        norm = (hl2[i] - ll[i]) / rng if rng > EPSILON else 0.5
+        norm = ratio(hl2[i] - ll[i], rng, 0.5)
         v = 0.66 * (norm - 0.5) + 0.67 * v
         if v > 0.99:
             v = 0.999

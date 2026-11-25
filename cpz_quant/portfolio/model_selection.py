@@ -21,6 +21,8 @@ from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 
+from cpz_quant.frames import as_returns
+
 TRADING_DAYS = 252.0
 Allocator = Callable[[Dict[str, list]], Dict[str, float]]
 
@@ -194,8 +196,10 @@ def cross_validate(allocator: Allocator, returns: Mapping[str, Sequence[float]],
     """Fit ``allocator`` on each train fold and score its OOS portfolio returns.
 
     Args:
-        allocator: ``train_returns_dict -> {asset_id: weight}``.
-        returns: ``{asset_id: [returns]}``.
+        allocator: ``train_returns_dict -> {asset_id: weight}``. Each train
+            fold is passed as an ``{asset_id: [returns]}`` dict.
+        returns: a Polars or pandas DataFrame (numeric columns are assets)
+            or an ``{asset_id: [returns]}`` dict, like every allocator.
         cv: a splitter with ``.split(n_samples)`` (WalkForward / CombinatorialPurgedCV).
 
     CPCV summaries average complete reconstructed path metrics, not repeated
@@ -203,7 +207,7 @@ def cross_validate(allocator: Allocator, returns: Mapping[str, Sequence[float]],
     indices; their held-out observations form one time-ordered path. Invalid or
     insufficient folds and non-finite allocator outputs raise, never skip.
     """
-    ids, R = _as_matrix(returns)
+    ids, R = _as_matrix(as_returns(returns))
     T = R.shape[0]
     oos_chunks: List[np.ndarray] = []
     test_chunks: List[np.ndarray] = []

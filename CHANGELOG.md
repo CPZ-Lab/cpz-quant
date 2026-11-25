@@ -4,6 +4,101 @@ All notable changes to cpz-quant are documented here. The format follows [Keep a
 
 ## [Unreleased]
 
+### Changed (may break callers)
+
+- Scalar indicator calls on an empty input raise `ValueError` (they returned
+  0.0). A NaN latest value is returned as NaN with a `RuntimeWarning`
+  instead of the last value before it.
+- After one missing bar, EMA, DEMA, TEMA, MACD, RSI, ATR, ADX, Supertrend,
+  OBV and the other recursive indicators stay NaN for the rest of the
+  series (as TA-Lib); window indicators recover once the gap leaves the
+  window. Callers that read `ind.atr(...)` as a size input get NaN on data
+  with one null high: cpz-ai (cpz-py) `atr_size` needs an `isfinite` guard.
+- A NaN inside a window gives NaN in CCI, z-scores, ROC, momentum, STC, MFI,
+  Williams %R, stochastic, Fisher, ADX, CMO, CMF, Aroon, rolling correlation
+  and beta, and the regression R-squared (they used to read 0, 50, -50, 0.5
+  or another finite value); NVI and PVI stay NaN after a missing bar. Flat prices give NaN in RSI, MFI, the
+  Ultimate Oscillator, fast stochastic and Williams %R.
+- `certify` raises when `max_drawdown` looks like a fraction: a magnitude of
+  1 or less without `analytics=` confirming it, or a value equal to
+  `analytics.max_drawdown` (including -1.0 for a wipe-out). With
+  `analytics=` it also raises when the two drawdowns contradict each other.
+- `turnover_analysis.estimated_cost_bps` is 30 to 100 times smaller for
+  partial rebalances (it is now bps of the book). Without a cost model the
+  cost fields are `None`. With one, a traded symbol without ADV, or without
+  volatility for the sqrt and Almgren-Chriss models, raises (they were
+  filled with 1% of the book and 2% a day). `sqrt_impact`, `linear_impact`
+  and `almgren_chriss` raise on a missing ADV or volatility instead of using
+  a volatility of 1.0 or returning zero impact.
+- `hurst()` reads about 0.13 lower for the same series (bias removed); the
+  default `min_lag` is 10.
+- `fundamental_factors` needs market caps as series aligned with the returns,
+  or `caps_at_start=True` for single start-of-sample numbers; with momentum
+  it regresses only days from `momentum_window` on (`start_index`).
+- `alpha_decay_capacity`, `brinson_fachler` and `fundamental_factors` raise on
+  inputs they used to drop or default.
+- `factor_attribution` returns `None` for t-stats and the idiosyncratic
+  Sharpe of an exact fit.
+
+### Fixed
+
+- Indicators: the scalar form returns the value at the latest bar. A missing
+  bar no longer hands back a value from before the gap; SMA and other window
+  indicators blank only the windows holding the gap (as pandas), recursive
+  smoothers (EMA family, MACD, RSI, ATR) turn NaN as in TA-Lib, and a NaN
+  latest value warns. An empty input raises `ValueError` instead of
+  returning 0.
+- Indicators of indicators (SMA, EMA, DEMA, TEMA, Bollinger, MACD, KAMA of
+  RSI or ATR; RSI of an SMA) skip the input's warm-up instead of returning
+  NaN everywhere or counting it as flat bars; they match TA-Lib.
+  Stochastic %D no longer fills the %K warm-up with 50.
+- RSI on an unmoving price is NaN (0/0), not 0. The Rust kernel matches.
+- `momentum()` keeps working after `rsi()` and other momentum indicators run
+  (the submodule of the same name no longer replaces it).
+- pandas DataFrames and Series work in every indicator; a 2-D array, a
+  derived `source` on a bare series and `obv()` without volume raise. The
+  Rust Garman-Klass kernel is only used with `annualize=True` and 252 days.
+  `TRADING_DAYS_PER_YEAR` is documented as a default, not a global setting.
+- Ichimoku refuses `displacement < 1` (it shifted spans onto later bars);
+  Supertrend flips on the bar that closes through the band (pandas-ta);
+  EMA and MACD docstrings state their first-value seeding.
+- Hurst exponent uses the bias-corrected (Anis-Lloyd-Peters) rescaled
+  range, so a random walk reads about 0.5 instead of 0.63; the default
+  `min_lag` is 10 and too-short input gives NaN instead of 0.5.
+- `fundamental_factors` builds exposures point in time (momentum from days
+  `t-252` to `t-21`, size from the previous close's cap) and no longer finds
+  a momentum premium in noise; missing caps or book values raise. Adds
+  `start_index` and `momentum_skip`.
+- `turnover_analysis` reports the rebalance cost in bps of the book (and
+  `estimated_cost_usd`) instead of summing per-trade bps.
+- `CostModel.estimate` is documented as one leg; `breakdown()` splits impact
+  by `permanent_fraction`; unknown model names raise; Almgren-Chriss refuses
+  settings it does not use; sells cost the same as buys in every model.
+- `alpha_decay_capacity` counts short positions and refuses positions with
+  no ADV.
+- `brinson_fachler` raises on holdings missing from the sector map or
+  without a return, and counts net-short sectors.
+- `alpha_beta_decomposition` and `rolling_attribution`: information ratio is
+  mean active return over tracking error. Per-factor risk in
+  `factor_risk_decomposition` and `risk_attribution` uses the Euler split,
+  which adds up to the factor share. Drawdown risk measures count a loss on
+  the first return.
+- `cross_validate` and `grid_search` accept Polars and pandas DataFrames.
+- Certification analytics: time under water counts only days below the
+  peak; up/down capture use Morningstar's geometric per-period ratio;
+  worst/best month run month-end to month-end; an equity value at or below
+  zero ends the curve as a total loss instead of being dropped, also when
+  the curve is too short for the statistics. Rust kernel updated to match.
+- Regime breakdown labels each day from data known before it (trailing
+  volatility, previous benchmark close) and counts a wipe-out.
+- `certify`: a missing beta or capacity scores the lowest band, never above a
+  measured value; NumPy numbers and booleans are accepted; a
+  `max_drawdown` that looks like a fraction raises (it is in percent).
+- `factor_attribution`: an exact factor fit gives `None` alpha t-stat and
+  idiosyncratic Sharpe instead of rounding noise.
+- `momentum` (indicator and submodule) can be pickled and documents the
+  indicator; the NumPy SMA is O(n) again.
+
 ## [1.2.0] - 2026-09-17
 
 - Expand `cpz_quant.indicators` from 32 to 91 indicator functions and add all

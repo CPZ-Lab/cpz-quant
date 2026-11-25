@@ -7,6 +7,7 @@ All functions operate on raw numpy arrays and return numpy arrays.
 
 from __future__ import annotations
 
+import math
 from typing import Tuple
 
 import numpy as np
@@ -15,6 +16,7 @@ from ._helpers import (
     EPSILON,
     TRADING_DAYS_PER_YEAR,
     _rolling_view,
+    ratio,
     rolling_apply,
     safe_divide,
 )
@@ -40,7 +42,7 @@ def zscore_series(
         window = values[i - period + 1 : i + 1]
         mean = np.mean(window)
         std = np.std(window, ddof=ddof)
-        out[i] = (values[i] - mean) / std if std > EPSILON else 0.0
+        out[i] = ratio(values[i] - mean, std, 0.0)
     return out
 
 
@@ -64,7 +66,9 @@ def rolling_corr_series(
         b = series_b[i - period + 1 : i + 1]
         std_a = np.std(a, ddof=1)
         std_b = np.std(b, ddof=1)
-        if std_a > EPSILON and std_b > EPSILON:
+        if np.isnan(std_a) or np.isnan(std_b):
+            out[i] = np.nan  # a missing value in the window
+        elif std_a > EPSILON and std_b > EPSILON:
             out[i] = np.corrcoef(a, b)[0, 1]
         else:
             out[i] = 0.0
@@ -91,7 +95,9 @@ def rolling_beta_series(
         y = asset_returns[i - period + 1 : i + 1]
         x = benchmark_returns[i - period + 1 : i + 1]
         var_x = np.var(x, ddof=1)
-        if var_x > EPSILON:
+        if np.isnan(var_x) or np.isnan(y).any():
+            out[i] = np.nan  # a missing value in the window
+        elif var_x > EPSILON:
             cov_xy = np.cov(x, y, ddof=1)[0, 1]
             out[i] = cov_xy / var_x
         else:
@@ -101,64 +107,86 @@ def rolling_beta_series(
 
 # ── Hurst Exponent ───────────────────────────────────────────────────
 
+def _expected_rescaled_range(n: int) -> float:
+    """Expected R/S of ``n`` i.i.d. Gaussian values.
+
+    Anis and Lloyd (1976) with Peters' (1994) small-sample factor
+    ``(n - 0.5) / n``::
+
+        E[R/S]_n = (n - 0.5)/n * Gamma((n-1)/2) / (sqrt(pi) Gamma(n/2))
+                   * sum_{i=1}^{n-1} sqrt((n - i) / i)
+
+    The gamma ratio is taken through ``lgamma`` so it does not overflow.
+    """
+    i = np.arange(1, n, dtype=np.float64)
+    total = float(np.sum(np.sqrt((n - i) / i)))
+    gamma_ratio = math.exp(math.lgamma((n - 1) / 2.0) - math.lgamma(n / 2.0)) / math.sqrt(math.pi)
+    return (n - 0.5) / n * gamma_ratio * total
+
+
 def hurst_series(
     close: np.ndarray,
     max_lag: int = 100,
     *,
-    min_lag: int = 2,
+    min_lag: int = 10,
 ) -> float:
-    """Hurst exponent via rescaled range (R/S) analysis.
+    """Hurst exponent by bias-corrected rescaled range (Anis-Lloyd-Peters R/S).
 
     H < 0.5 → mean-reverting
     H = 0.5 → random walk
     H > 0.5 → trending
 
+    Plain R/S on short blocks overstates H: a random walk reads about
+    0.63 instead of 0.5. This estimator subtracts the expected R/S of
+    i.i.d. noise at each block size (Anis and Lloyd 1976, with Peters 1994)
+    and reports ``0.5 + slope`` of the excess, the corrected R/S of Weron
+    (2002, Physica A 312). On simulated random walks of 300 to 1,500 bars
+    it averages within about 0.01 of 0.5; R/S remains a noisy estimator
+    (standard error roughly 0.03 to 0.07 at those lengths), so read small
+    departures from 0.5 with care.
+
     Args:
-        close: Price array.
-        max_lag: Maximum lag for R/S computation.
-        min_lag: Minimum lag (default 2).
+        close: Price array (positive, finite).
+        max_lag: Largest block size, capped at half the number of returns.
+        min_lag: Smallest block size (default 10; Peters recommends at
+            least 10, below which the expected-R/S formula is unreliable).
 
     Returns:
-        Scalar Hurst exponent.
+        Scalar Hurst exponent, or NaN when fewer than two block sizes fit
+        between *min_lag* and *max_lag* (too little data).
+
+    Raises:
+        ValueError: on non-finite or non-positive prices, or ``min_lag < 2``.
     """
-    log_prices = np.log(np.maximum(close, EPSILON))
-    returns = np.diff(log_prices)
+    close = np.asarray(close, dtype=np.float64)
+    if min_lag < 2:
+        raise ValueError(f"min_lag must be >= 2, got {min_lag}")
+    if close.size and (not np.all(np.isfinite(close)) or np.any(close <= 0)):
+        raise ValueError("hurst() needs positive, finite prices; drop or fill missing bars first")
+    returns = np.diff(np.log(close))
     n = len(returns)
     max_lag = min(max_lag, n // 2)
 
-    if max_lag < min_lag:
-        return 0.5
-
-    lags = range(min_lag, max_lag + 1)
-    rs_values = []
     lag_values = []
-
-    for lag in lags:
+    excess = []
+    for lag in range(min_lag, max_lag + 1):
         n_blocks = n // lag
-        if n_blocks < 1:
-            continue
-
-        rs_sum = 0.0
-        count = 0
+        ratios = []
         for b in range(n_blocks):
             block = returns[b * lag : (b + 1) * lag]
-            mean_b = np.mean(block)
-            deviations = np.cumsum(block - mean_b)
-            r = np.max(deviations) - np.min(deviations)
+            deviations = np.cumsum(block - np.mean(block))
             s = np.std(block, ddof=1)
             if s > EPSILON:
-                rs_sum += r / s
-                count += 1
-
-        if count > 0:
-            rs_values.append(np.log(rs_sum / count))
-            lag_values.append(np.log(lag))
+                ratios.append((np.max(deviations) - np.min(deviations)) / s)
+        if ratios:
+            excess.append(math.log(float(np.mean(ratios))) - math.log(_expected_rescaled_range(lag)))
+            lag_values.append(math.log(lag))
 
     if len(lag_values) < 2:
-        return 0.5
+        return float("nan")
 
-    coeffs = np.polyfit(lag_values, rs_values, 1)
-    return float(coeffs[0])
+    slope = np.polyfit(lag_values, excess, 1)[0]
+    return float(0.5 + slope)
 
 
 # ── Linear Regression ────────────────────────────────────────────────
@@ -197,7 +225,7 @@ def linear_reg_series(
         a = y_mean - b * x_mean
         slope[i] = b
         intercept[i] = a
-        r_sq[i] = (ss_xy ** 2) / (ss_x * ss_y) if ss_y > EPSILON else 0.0
+        r_sq[i] = ratio(ss_xy ** 2, ss_x * ss_y, 0.0)
         forecast[i] = a + b * period
 
     return slope, r_sq, intercept, forecast

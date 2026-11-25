@@ -83,6 +83,18 @@ pub fn kama(close: Vec<f64>, period: usize, fast_sc: f64, slow_sc: f64) -> PyRes
     Ok(out)
 }
 
+/// RSI from the smoothed averages: 100 * gain / (gain + loss), NaN when
+/// both are zero (a flat price has no defined RSI). Mirrors
+/// `cpz_quant.indicators.momentum.rsi_series`.
+fn rsi_value(avg_gain: f64, avg_loss: f64) -> f64 {
+    let den = avg_gain + avg_loss;
+    if den > 0.0 {
+        100.0 * avg_gain / den
+    } else {
+        f64::NAN
+    }
+}
+
 /// RSI via Wilder's smoothing.
 #[pyfunction]
 pub fn rsi(close: Vec<f64>, period: usize) -> PyResult<Vec<f64>> {
@@ -106,15 +118,13 @@ pub fn rsi(close: Vec<f64>, period: usize) -> PyResult<Vec<f64>> {
     let mut avg_gain: f64 = gains[..period].iter().sum::<f64>() / period as f64;
     let mut avg_loss: f64 = losses[..period].iter().sum::<f64>() / period as f64;
 
-    let rs = if avg_loss > 1e-15 { avg_gain / avg_loss } else { f64::INFINITY };
-    out[period] = 100.0 - 100.0 / (1.0 + rs);
+    out[period] = rsi_value(avg_gain, avg_loss);
 
     let alpha = 1.0 / period as f64;
     for i in period..(n - 1) {
         avg_gain = alpha * gains[i] + (1.0 - alpha) * avg_gain;
         avg_loss = alpha * losses[i] + (1.0 - alpha) * avg_loss;
-        let rs = if avg_loss > 1e-15 { avg_gain / avg_loss } else { f64::INFINITY };
-        out[i + 1] = 100.0 - 100.0 / (1.0 + rs);
+        out[i + 1] = rsi_value(avg_gain, avg_loss);
     }
     Ok(out)
 }
