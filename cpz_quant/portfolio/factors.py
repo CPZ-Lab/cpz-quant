@@ -5,7 +5,8 @@ All functions are pure: data in, results out. No DB access, no API calls.
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+import math
+from typing import Dict, List, Mapping, Optional, Sequence, Union
 
 import numpy as np
 from pydantic import BaseModel, Field
@@ -28,12 +29,17 @@ class StatFactorModel(BaseModel):
 
 
 class FundFactorModel(BaseModel):
-    """Fundamental factor model output."""
+    """Fundamental factor model output.
+
+    ``factor_returns`` holds one value per regression day, the first being
+    day ``start_index`` of the aligned return series.
+    """
     factor_returns: Dict[str, List[float]] = Field(default_factory=dict)
     factor_loadings: Dict[str, Dict[str, float]] = Field(default_factory=dict)
     factor_premiums: Dict[str, float] = Field(default_factory=dict)
     t_stats: Dict[str, float] = Field(default_factory=dict)
     r_squared: float = 0.0
+    start_index: int = 0
 
 
 class FactorRiskDecomp(BaseModel):
@@ -104,82 +110,153 @@ def statistical_factor_model(
 @frame_friendly
 def fundamental_factors(
     returns: Dict[str, List[float]],
-    market_caps: Dict[str, float],
+    market_caps: Mapping[str, Union[float, Sequence[float]]],
     *,
     book_values: Optional[Dict[str, float]] = None,
     momentum_window: int = 252,
+    momentum_skip: int = 21,
     trading_days: int = TRADING_DAYS,
 ) -> FundFactorModel:
-    """Cross-sectional fundamental factor model (Fama-MacBeth style).
+    """Cross-sectional fundamental factor model (Fama-MacBeth, point in time).
 
-    Builds factor exposures for Market, Size (SMB), and optionally
-    Value (HML) and Momentum (UMD), then runs cross-sectional
-    regressions to estimate factor returns.
+    For every day ``t`` the cross-section of returns ``R[t]`` is regressed
+    on exposures that were known at the close of day ``t - 1``:
+
+    - market: 1 for every asset;
+    - size: ``-(log cap_i(t-1) - mean)``;
+    - value (with *book_values*): ``book_i / cap_i(t-1) - mean``;
+    - momentum: compounded return over ``R[t - momentum_window : t -
+      momentum_skip]`` (the classic 12-1 month window by default), demeaned.
+
+    Building the exposures from the same returns they are regressed on (for
+    example momentum over the last year of the sample, applied to every day
+    of that year) fits part of each day's return with itself and reports a
+    premium of roughly ``252 / days`` with large t-stats on pure noise.
 
     Args:
-        returns: ``{asset_id: [daily_returns]}`` mapping.
-        market_caps: ``{asset_id: market_cap}`` mapping.
-        book_values: ``{asset_id: book_value}`` (optional, enables HML).
-        momentum_window: Look-back for momentum factor.
+        returns: ``{asset_id: [daily_returns]}`` mapping (aligned at the end).
+        market_caps: per asset either a time series aligned with *returns*
+            (the cap at the close of each day; day ``t`` uses day ``t - 1``)
+            or one number, the cap at the close *before the first return*.
+            A single number is rolled forward with the asset's own returns,
+            so the size exposure on day ``t`` only uses returns before ``t``.
+            Passing today's caps as the single number is look-ahead: they
+            already contain the sample's returns.
+        book_values: ``{asset_id: book_value}`` (optional, enables value),
+            held fixed over the sample.
+        momentum_window: Look-back for momentum (days). Momentum is used
+            when there are at least ``momentum_window + 2`` days; the
+            regressions then start on day ``momentum_window``.
+        momentum_skip: Most recent days left out of the momentum window.
         trading_days: Trading days per year.
+
+    Returns:
+        :class:`FundFactorModel`. ``factor_returns`` has one value per
+        regression day, starting at ``start_index`` of the aligned return
+        series. ``factor_loadings`` are the exposures known at the end of
+        the sample (the ones that apply to the next day). Premiums and
+        t-stats are Fama-MacBeth averages over the regression days.
+
+    Raises:
+        KeyError: an asset has no market cap (or no book value when
+            *book_values* is given).
+        ValueError: a non-positive or non-finite market cap, a cap series
+            that does not match the returns, or too few days.
     """
     ids = list(returns.keys())
     min_len = min(len(returns[i]) for i in ids)
     n = len(ids)
+    R = np.column_stack([np.array(returns[i][-min_len:], dtype=np.float64) for i in ids])
+    t_len = R.shape[0]
 
-    log_caps = {s: np.log(max(market_caps.get(s, 1.0), EPSILON)) for s in ids}
-    mean_log_cap = np.mean(list(log_caps.values()))
-    size_exposure = {s: -(log_caps[s] - mean_log_cap) for s in ids}
+    missing_caps = [s for s in ids if s not in market_caps]
+    if missing_caps:
+        raise KeyError(f"market_caps missing for {missing_caps}")
+    # caps[t, i] = cap of asset i at the close of day t; row 0 is the close
+    # before the first return, so day t's exposures read row t.
+    caps = np.empty((t_len + 1, n))
+    for i, s in enumerate(ids):
+        c = market_caps[s]
+        if np.ndim(c) == 0:
+            caps[0, i] = float(c)  # type: ignore[arg-type]
+            caps[1:, i] = caps[0, i] * np.cumprod(1.0 + R[:, i])
+        else:
+            series = np.asarray(c, dtype=np.float64)
+            if series.size < t_len:
+                raise ValueError(f"market_caps[{s!r}] has {series.size} values for {t_len} returns")
+            caps[1:, i] = series[-t_len:]
+            caps[0, i] = np.nan  # unknown: day 0 cannot be regressed
+    if np.any(caps[1:] <= 0) or np.any(np.isinf(caps)) or np.any(np.isnan(caps[1:])):
+        raise ValueError("market caps must be positive and finite")
+    if not np.isnan(caps[0]).any() and np.any(caps[0] <= 0):
+        raise ValueError("market caps must be positive and finite")
 
     factor_names = ["market", "size"]
-    loadings: Dict[str, Dict[str, float]] = {}
-    for s in ids:
-        loadings[s] = {"market": 1.0, "size": size_exposure[s]}
-
     if book_values:
-        bm = {s: book_values.get(s, 0) / max(market_caps.get(s, 1), EPSILON) for s in ids}
-        mean_bm = np.mean(list(bm.values()))
-        for s in ids:
-            loadings[s]["value"] = bm[s] - mean_bm
+        missing_bv = [s for s in ids if s not in book_values]
+        if missing_bv:
+            raise KeyError(f"book_values missing for {missing_bv}")
+        book = np.array([float(book_values[s]) for s in ids])
         factor_names.append("value")
-
-    if min_len >= momentum_window:
-        for s in ids:
-            r = np.array(returns[s], dtype=np.float64)
-            cum = float(np.prod(1.0 + r[-momentum_window:-21]) - 1.0) if len(r) > momentum_window else 0.0
-            loadings[s]["momentum"] = cum
-        mean_mom = np.mean([loadings[s]["momentum"] for s in ids])
-        for s in ids:
-            loadings[s]["momentum"] -= mean_mom
+    use_momentum = t_len >= momentum_window + 2
+    if use_momentum:
+        if not 0 <= momentum_skip < momentum_window:
+            raise ValueError("momentum_skip must be >= 0 and < momentum_window")
         factor_names.append("momentum")
+        log_growth = np.vstack([np.zeros((1, n)), np.cumsum(np.log1p(R), axis=0)])
 
-    B = np.zeros((n, len(factor_names)))
-    for i, s in enumerate(ids):
-        for j, f in enumerate(factor_names):
-            B[i, j] = loadings[s].get(f, 0.0)
+    def exposures(t: int) -> np.ndarray:
+        """Exposure matrix for day ``t``, from data up to the close of ``t - 1``."""
+        cols = [np.ones(n)]
+        log_cap = np.log(caps[t])
+        cols.append(-(log_cap - log_cap.mean()))
+        if book_values:
+            bm = book / caps[t]
+            cols.append(bm - bm.mean())
+        if use_momentum:
+            lo, hi = t - momentum_window, t - momentum_skip
+            mom = np.expm1(log_growth[hi] - log_growth[lo])
+            cols.append(mom - mom.mean())
+        return np.column_stack(cols)
 
-    R = np.column_stack([np.array(returns[i][-min_len:], dtype=np.float64) for i in ids])
-    t = R.shape[0]
+    first = momentum_window if use_momentum else (0 if not np.isnan(caps[0]).any() else 1)
+    days = range(first, t_len)
+    if len(days) < 2:
+        raise ValueError(
+            f"need at least two regression days; {t_len} days of returns start regressions "
+            f"on day {first}"
+        )
 
-    factor_ret = np.zeros((t, len(factor_names)))
-    for k in range(t):
-        try:
-            betas, _, _, _ = np.linalg.lstsq(B, R[k, :], rcond=None)
-            factor_ret[k, :] = betas
-        except np.linalg.LinAlgError:
-            pass
+    k_f = len(factor_names)
+    factor_ret = np.empty((len(days), k_f))
+    ss_res = 0.0
+    for row, t in enumerate(days):
+        B_t = exposures(t)
+        f_t, _, _, _ = np.linalg.lstsq(B_t, R[t, :], rcond=None)
+        factor_ret[row, :] = f_t
+        ss_res += float(np.sum((R[t, :] - B_t @ f_t) ** 2))
 
+    t_obs = len(days)
     premiums = {f: float(np.mean(factor_ret[:, j]) * trading_days) for j, f in enumerate(factor_names)}
     t_stats_out = {}
     for j, f in enumerate(factor_names):
-        mean_f = np.mean(factor_ret[:, j])
-        std_f = np.std(factor_ret[:, j], ddof=1)
-        t_stats_out[f] = float(mean_f / max(std_f, EPSILON) * np.sqrt(t))
+        mean_f = float(np.mean(factor_ret[:, j]))
+        std_f = float(np.std(factor_ret[:, j], ddof=1))
+        t_stats_out[f] = mean_f / max(std_f, EPSILON) * math.sqrt(t_obs)
 
-    predicted = R @ np.linalg.pinv(B.T)
-    ss_res = np.sum((R - predicted @ B.T) ** 2)
-    ss_tot = np.sum((R - R.mean()) ** 2)
+    R_used = R[first:]
+    ss_tot = float(np.sum((R_used - R_used.mean()) ** 2))
     r2 = 1.0 - ss_res / max(ss_tot, EPSILON)
+
+    # Exposures known after the last close: what applies to the next day.
+    if use_momentum:
+        latest = exposures(t_len) if t_len - momentum_window >= 0 else None
+    else:
+        latest = exposures(t_len)
+    loadings: Dict[str, Dict[str, float]] = {}
+    if latest is not None:
+        for i, s in enumerate(ids):
+            loadings[s] = {f: float(latest[i, j]) for j, f in enumerate(factor_names)}
 
     return FundFactorModel(
         factor_returns={f: factor_ret[:, j].tolist() for j, f in enumerate(factor_names)},
@@ -187,6 +264,7 @@ def fundamental_factors(
         factor_premiums=premiums,
         t_stats=t_stats_out,
         r_squared=round(float(r2), 4),
+        start_index=int(first),
     )
 
 
@@ -225,6 +303,9 @@ def factor_risk_decomposition(
     specific_risk = w' D w
     total = factor_risk + specific_risk
 
+    ``per_factor_contribution[j] = (B'w)_j * (F B'w)_j`` (Euler allocation),
+    which sums to ``factor_variance``.
+
     Args:
         weights: ``{asset_id: weight}``.
         factor_loadings: ``(n_assets, n_factors)`` loading matrix B.
@@ -247,9 +328,12 @@ def factor_risk_decomposition(
 
     per_factor: Dict[str, float] = {}
     if factor_names and B.shape[1] == len(factor_names):
+        # Euler split: (B'w)_j * (F B'w)_j includes factor j's covariance with
+        # the others, so the parts sum to factor_variance (one can be negative).
         Bw = B.T @ w
+        FBw = F @ Bw
         for j, fname in enumerate(factor_names):
-            contrib = float(Bw[j] ** 2 * F[j, j])
+            contrib = float(Bw[j] * FBw[j])
             per_factor[fname] = round(contrib, 8)
 
     return FactorRiskDecomp(

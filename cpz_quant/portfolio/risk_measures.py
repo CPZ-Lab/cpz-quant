@@ -59,12 +59,17 @@ _DRAWDOWN_MEASURES = {
 
 
 def _drawdowns(returns: np.ndarray, compounded: bool = True) -> np.ndarray:
-    """Drawdown series (<= 0) from a return vector."""
+    """Drawdown series (<= 0) from a return vector.
+
+    Wealth starts at 1 before the first return, and that starting value
+    counts as the first peak, so a loss on the very first return is a
+    drawdown (-3% then -4% is a 6.88% drawdown, not 4%).
+    """
     if compounded:
         wealth = np.cumprod(1.0 + returns)
     else:
         wealth = 1.0 + np.cumsum(returns)
-    peak = np.maximum.accumulate(wealth)
+    peak = np.maximum(np.maximum.accumulate(wealth), 1.0)
     return wealth / peak - 1.0
 
 
